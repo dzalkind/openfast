@@ -165,6 +165,7 @@ IMPLICIT NONE
     TYPE(WAMIT_InputType)  :: u_WAMIT      !< WAMIT module inputs [-]
     TYPE(WAMIT2_InputType)  :: u_WAMIT2      !< WAMIT2 module inputs [-]
     TYPE(Waves2_InputType)  :: u_Waves2      !< Waves2 module inputs [-]
+    REAL(DbKi)  :: TMax      !< End Time [-]
   END TYPE HydroDyn_MiscVarType
 ! =======================
 ! =========  HydroDyn_ParameterType  =======
@@ -4493,6 +4494,7 @@ ENDIF
       CALL Waves2_CopyInput( SrcMiscData%u_Waves2, DstMiscData%u_Waves2, CtrlCode, ErrStat2, ErrMsg2 )
          CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg,RoutineName)
          IF (ErrStat>=AbortErrLev) RETURN
+    DstMiscData%TMax = SrcMiscData%TMax
  END SUBROUTINE HydroDyn_CopyMisc
 
  SUBROUTINE HydroDyn_DestroyMisc( MiscData, ErrStat, ErrMsg )
@@ -4764,6 +4766,7 @@ ENDIF
          Int_BufSz = Int_BufSz + SIZE( Int_Buf )
          DEALLOCATE(Int_Buf)
       END IF
+      Db_BufSz   = Db_BufSz   + 1  ! TMax
   IF ( Re_BufSz  .GT. 0 ) THEN 
      ALLOCATE( ReKiBuf(  Re_BufSz  ), STAT=ErrStat2 )
      IF (ErrStat2 /= 0) THEN 
@@ -5139,6 +5142,8 @@ ENDIF
       ELSE
         IntKiBuf( Int_Xferred ) = 0; Int_Xferred = Int_Xferred + 1
       ENDIF
+      DbKiBuf ( Db_Xferred:Db_Xferred+(1)-1 ) = InData%TMax
+      Db_Xferred   = Db_Xferred   + 1
  END SUBROUTINE HydroDyn_PackMisc
 
  SUBROUTINE HydroDyn_UnPackMisc( ReKiBuf, DbKiBuf, IntKiBuf, Outdata, ErrStat, ErrMsg )
@@ -5693,6 +5698,8 @@ ENDIF
       IF(ALLOCATED(Re_Buf )) DEALLOCATE(Re_Buf )
       IF(ALLOCATED(Db_Buf )) DEALLOCATE(Db_Buf )
       IF(ALLOCATED(Int_Buf)) DEALLOCATE(Int_Buf)
+      OutData%TMax = DbKiBuf( Db_Xferred ) 
+      Db_Xferred   = Db_Xferred + 1
  END SUBROUTINE HydroDyn_UnPackMisc
 
  SUBROUTINE HydroDyn_CopyParam( SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg )

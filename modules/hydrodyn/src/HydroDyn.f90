@@ -27,6 +27,7 @@ MODULE HydroDyn
 
    USE HydroDyn_Types   
    USE NWTC_Library
+   USE NWTC_Num
    USE WAMIT
    USE WAMIT2
    USE HydroDyn_Input
@@ -59,7 +60,8 @@ MODULE HydroDyn
    PUBLIC :: HydroDyn_CalcConstrStateResidual        ! Tight coupling routine for returning the constraint state residual
    PUBLIC :: HydroDyn_CalcContStateDeriv             ! Tight coupling routine for computing derivatives of continuous states
    !PUBLIC :: HydroDyn_UpdateDiscState                ! Tight coupling routine for updating discrete states
-      
+   ! CKA 3/9/2018 
+   Public FHA_Force   
    
    CONTAINS
    
@@ -326,7 +328,10 @@ SUBROUTINE HydroDyn_Init( InitInp, u, p, x, xd, z, OtherState, y, m, Interval, I
             CALL CleanUp()
             RETURN
          END IF
-      
+         
+         ! CHANGE: CKA 3/16/2018 Add TMax to misc. data to be used in FHA Force
+         m%TMax=InitInp%TMax
+         ! END CHANGE
       
          ! Initialize the NWTC Subroutine Library
          
@@ -1722,6 +1727,7 @@ END SUBROUTINE HydroDyn_UpdateStates
 SUBROUTINE HydroDyn_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg )   
    
       REAL(DbKi),                         INTENT(IN   )  :: Time        !< Current simulation time in seconds
+      REAL(DbKi)                                         :: F_FHA(6,1)       !! FHA force
       TYPE(HydroDyn_InputType),           INTENT(INOUT)  :: u           !< Inputs at Time (note that this is intent out because we're copying the u%mesh into m%u_wamit%mesh)
       TYPE(HydroDyn_ParameterType),       INTENT(IN   )  :: p           !< Parameters
       TYPE(HydroDyn_ContinuousStateType), INTENT(IN   )  :: x           !< Continuous states at Time
@@ -1796,6 +1802,13 @@ SUBROUTINE HydroDyn_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat,
          ! Attach to the output point mesh
       y%Mesh%Force (:,1) = m%F_PtfmAdd(1:3)
       y%Mesh%Moment(:,1) = m%F_PtfmAdd(4:6)
+    
+         ! CKA 3/9/2018 - Start Change - Apply fluid harmonic absorber loading as external force
+        CALL FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot) 
+          !write(*,*) Time, F_FHA(3,1)       
+        y%Mesh%Force (:,1) =y%Mesh%Force (:,1) + F_FHA(1:3,1)
+        y%Mesh%Moment(:,1) =y%Mesh%Moment(:,1) + F_FHA(4:6,1)
+         ! End Change
       
       IF ( p%PotMod == 1 ) THEN
          IF ( m%u_WAMIT%Mesh%Committed ) THEN  ! Make sure we are using WAMIT / there is a valid mesh
@@ -2152,5 +2165,529 @@ CONTAINS
 END FUNCTION CalcLoadsAtWRP
    
 !----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot)   
+USE NWTC_Library
+
+    TYPE(HydroDyn_InputType),           INTENT(IN   )  :: u           !< Inputs at Time (note that this is intent out because we're copying the u%mesh into m%u_wamit%mesh)
+    TYPE(HydroDyn_ParameterType),       INTENT(IN   )  :: p           !< Parameters
+    TYPE(HydroDyn_ContinuousStateType), INTENT(IN   )  :: x           !< Continuous states at Time
+    TYPE(HydroDyn_DiscreteStateType),   INTENT(IN   )  :: xd          !< Discrete states at Time
+    TYPE(HydroDyn_ConstraintStateType), INTENT(IN   )  :: z           !< Constraint states at Time
+    TYPE(HydroDyn_OtherStateType),      INTENT(IN   )  :: OtherState  !< Other states at Time
+    TYPE(HydroDyn_OutputType),          INTENT(IN   )  :: y           !< Outputs computed at Time (Input only so that mesh con-
+    TYPE(HydroDyn_MiscVarType),         INTENT(INOUT)  :: m           !< Initial misc/optimization variables
+
+    CHARACTER(*),                       INTENT(  OUT)  :: ErrMsg      !! Error message if ErrStat /= ErrID_None
+
+    INTEGER(IntKi),                     INTENT(  OUT)  :: ErrStat     !! Error status of the operation
+    INTEGER                                            :: I,II,III        ! Loop counters
+    INTEGER,SAVE                                       :: n=1           !! time step counter
+    INTEGER(IntKi),SAVE                                :: n_FHA        !! number of FHAs in system
+    INTEGER(IntKi),SAVE                                :: run_flag(1) ! Flag to set to either use the FHA routine or ignore it.  Routine will run if any of the masses in input file are greater than 0
+
+    REAL(DbKi),                         INTENT(IN   )  :: Time        !< Current simulation time in seconds
+    REAL(DbKi),SAVE                                    :: Time_last        !< Last step simulation time in seconds
+    REAL(ReKi)                                         :: dt        !< time step
+    REAL(DbKi),                         INTENT(  OUT)  :: F_FHA(6)       !! FHA force vector about the WAMIT ref pt.
+    REAL(ReKi),                         INTENT(IN   )  :: q(6), qdot(6), qdotdot(6)  !! Platform Positions, Velocities, and Accelerations at WAMIT Ref Pt (m,rad)     
+    REAL(DbKi)                                         :: Un(2,1) ! Results at time step n
+    REAL(DbKi)                                         :: Up1(2,1) ! Results at time step n+1
+    REAL(DbKi)                                         :: Um1(2,1) ! Results at time step n-1
+    REAL(DbKi)                                         :: Uexp(2,1) ! Expected results at time step n+1  
+    REAL(ReKi)                                         :: u_dummy(3)           !! dummy place holder for cross products               
+    REAL(ReKi)                                         :: q_LF(3,1)   !! Platform positions at FHA in local ref frame
+    REAL(ReKi)                                         :: qdot_LF(3,1)   !! Platform velocities at FHA in local ref frame
+    REAL(ReKi)                                         :: qdotdot_LF(3,1)   !! Platform acceleration at FHA in local ref frame
+    REAL(ReKi)                                         :: q_IF(3,1)   !! Platform positions at FHA in inertia frame
+    REAL(ReKi)                                         :: qdot_IF(3,1)   !! Platform  velocities at FHA in inertia frame
+    REAL(ReKi)                                         :: qdotdot_IF(3,1)   !! Platform  acceleration at FHA in inertia frame
+    REAL(ReKi)                                         :: dx_LF(1)   !! Platform position at FHA in inertia frame along the orientation of the FHA's motion
+    REAL(ReKi)                                         :: dxdot_LF(1)   !! Platform velocity at FHA in inertia frame along the orientation of the FHA's motion 
+    REAL(ReKi)                                         :: dxdotdot_LF(1)   !! Platform acceleration at FHA in inertia frame along the orientation of the FHA's motion     
+    REAL(ReKi)                                         :: T_IF_LF(3,3)    ! Eular angle transformation matrix to go from inertia frame to local frame of FHA
+    REAL(ReKi)                                         :: T_LF_IF(3,3)    !  Eular angle transformation matrix to go from  local frame of FHA to inertia frame
+    REAL(ReKi)                                         :: T_dq(3,3)    !  Eular angle transformation matrix to go from  fixed inertia frame to frame with system rotational displacements (w.r.t. the inertia frame)
+    REAL(ReKi),SAVE                                    :: g(3,1) !=(\0;0;-9.807\)        ! Gravity vector in the local ref frame   
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: q_n(:,:), qdot_n(:,:), qdotdot_n(:,:)  !! Platform Positions, Velocities, and Accelerations at WAMIT Ref Pt (m,rad) from last time step      
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: u_FHA(:,:)           !! FHA  displacement at time n (m) 
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: up_FHA(:,:)           !! FHA  velocity at time n (m/s) 
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: upp_FHA(:,:)           !! FHA  acceleration at time n (m/s2)        
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: data_hold(:,:)           !! Output data     
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: mass(:) !             !! FHA mass (kg)
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: k(:)                  !! FHA stiffness (N/m)
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: c(:)                  !! FHA damping (N/(m/s))
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: cq(:)                  !! FHA nonlinear damping (N/(m/s)^2)
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: m_xyz(:,:)            !! position of masses wrt WAMIT output pt. (m)
+    REAL(ReKi),SAVE,ALLOCATABLE                        :: u_bar(:,:)            !! Euler angles defining orientation of FHA w.r.t. inertia frame
+    REAL(DbKi),SAVE,ALLOCATABLE                        :: F_LF(:,:,:)         !< Force rxn at FHA in local frame
+    REAL(DbKi),SAVE,ALLOCATABLE                        :: F_IF(:,:,:)         !< Force rxn at FHA in inertia frame  
+    REAL(DbKi),SAVE,ALLOCATABLE                        :: Time_n(:)         !< Array of time stamps over the simulation
+
+    INTEGER                                            :: nvari        ! number of output variables
+    CHARACTER(9000)                                    :: out_fmt
+    CHARACTER(*), PARAMETER ::                                        FMT_OUT='aaaaaaa' 
+    !CHARACTER(*), PARAMETER :: FMT_OUT_HEADER 
+    !CHARACTER(*), PARAMETER :: blank
+    !REAL(ReKi),ALLOCATABLE                         :: u0(:)           !! FHA  displacement at time 0 (m) 
+    !REAL(ReKi),ALLOCATABLE                         :: up0(:)           !! FHA  velocity at time 0 (m/s)  
+    
+    ! Simulation time incriment  
+    dt=p%DT
+    !Update time stamp counter if we are in the next time stamp
+    IF (Time/=Time_last) THEN
+         n=n+1
+    END IF    
+
+    ! If first time step read inputs and set ICs for masses      
+    IF (n == 1) THEN
+        ! Read input file
+        CALL Read_FHA_Input(run_flag,n_FHA,u_FHA,up_FHA,upp_FHA,Time_n,mass,k,c,cq,m_xyz,u_bar,q_n,qdot_n,qdotdot_n,F_LF,F_IF,m,p,data_hold)
+        
+        ! Inital positions and velocities along the vector which the FHA acts in the FHA local frame
+        DO I=1,n_FHA  
+            CALL Euler_Transformation(T_IF_LF,u_bar(1,I),u_bar(2,I),u_bar(3,I)) 
+          !u_FHA(n,I) = u0(I)
+          !up_FHA(n,I) =up0(I)
+          
+            u_dummy =  MATMUL(T_IF_LF,q(1:3)+CROSS_PRODUCT(q(4:6),m_xyz(1:3,I))) 
+            u_FHA(n,I) = u_dummy(1)
+            
+            u_dummy =   MATMUL(T_IF_LF,qdot(1:3)+CROSS_PRODUCT(qdot(4:6),m_xyz(1:3,I)))
+            up_FHA(n,I) = u_dummy(1)
+            
+            u_dummy =  MATMUL(T_IF_LF,qdotdot(1:3)+CROSS_PRODUCT(qdotdot(4:6),m_xyz(1:3,I))) 
+        END DO
+        
+        ! System position, velocity, and acceleration at the WAMIT ref pt in the inertia frame
+        DO III=1,6
+            q_n(n,III)=q(III)
+            qdot_n(n,III)=qdot(III)
+        END DO
+        
+        ! Set gravity vector
+        g(1,1)=0
+        g(2,1)=0
+        g(3,1)=-9.807
+    END IF
+    
+        ! Store system positions, velocities, and accelerations at WAMIT ref. pt
+    DO I=1,6
+       q_n(n,I)=q(I)
+       qdot_n(n,I)=qdot(I)
+       qdotdot_n(n,I)=qdotdot(I)
+       
+       ! Guess at q(n+1)
+       q_n(n+1,I)=q_n(n,I)+qdot_n(n,I)*p%DT
+       qdot_n(n+1,I)=qdot_n(n,I)+qdotdot_n(n,I)*p%DT
+       
+       ! Time stamp
+       Time_n(n)=Time   
+    END DO 
+      
+
+    IF (run_flag(1)==1) THEN
+         DO I=1, n_FHA          
+            IF (n<3) THEN ! We are using 1st order backward Euler
+                Um1(1,1)=0
+                Um1(2,1)=0
+            ELSE ! We are using 2nd order backward Euler
+                Um1(1,1)=u_FHA(n-1,I)
+                Um1(2,1)=up_FHA(n-1,I)
+            END IF
+
+           ! Last incriment
+            Un(1,1)=u_FHA(n,I)
+            Un(2,1)=up_FHA(n,I)
+
+            ! Inital guess at time n+1
+            Up1(1,1)=Un(1,1)
+            Up1(2,1)=Un(2,1)
+            
+            ! Calculate hull displacement and velocity at FHA location in FHA local ref frame
+!             CALL Euler_Transformation(T_IF_LF,ATAN2(u_bar(3,I),u_bar(2,I)),ATAN2(u_bar(3,I),u_bar(1,I)),ATAN2(u_bar(2,I),u_bar(1,I)))
+            CALL Euler_Transformation(T_IF_LF,u_bar(1,I),u_bar(2,I),u_bar(3,I)) 
+            ! Position of the hull at the FHA location along the vector which the FHA acts in the FHA local frame
+            q_IF(1:3,1)=q(1:3)+CROSS_PRODUCT(q(4:6),m_xyz(1:3,I))
+            q_LF(1:3,1)=MATMUL(T_IF_LF,q_IF(1:3,1))
+            dx_LF(1)=q_LF(1,1)
+            
+            ! Velocity of the hull at the FHA location along the vector which the FHA acts in the FHA local frame
+            qdot_IF(1:3,1)=qdot(1:3)+CROSS_PRODUCT(qdot(4:6),m_xyz(1:3,I))
+            qdot_LF(1:3,1)=MATMUL(T_IF_LF,qdot_IF(1:3,1))
+            dxdot_LF(1)=qdot_LF(1,1)
+            
+            ! Reduce 
+            CALL iterate_Up1(Un,Up1,Um1,k(I),c(I),cq(I),mass(I),dx_LF,dxdot_LF,m_xyz(1:3,I),dt,n) 
+            
+            ! Update position and velocity at n+1
+            u_FHA(n+1,I)=Up1(1,1)
+            up_FHA(n+1,I)=Up1(2,1)
+        END DO
+   END IF               
+
+    ! Resolve forces to WAMIT ref point
+    F_FHA(1)=0
+    F_FHA(2)=0
+    F_FHA(3)=0 
+    F_FHA(4)=0
+    F_FHA(5)=0
+    F_FHA(6)=0     
+    IF (run_flag(1)==1) THEN 
+      
+        DO I=1,n_FHA        
+            ! Eular angle transformation matrix to go from inertia frame to local frame of FHA
+            CALL Euler_Transformation(T_IF_LF,u_bar(1,I),u_bar(2,I),u_bar(3,I)) 
+            ! Eular angle transformation matrix to go from local frame of FHA to inertia frame
+            T_LF_IF= TRANSPOSE(T_IF_LF)
+            
+            ! Forces calculated about the local FHA frame
+            ! Calculate external force due to relative displacement btw mass and undisplaced location in the hull 
+            q_IF(1:3,1)=q(1:3)+CROSS_PRODUCT(q(4:6),m_xyz(1:3,I))
+            q_LF(1:3,1)=MATMUL(T_IF_LF,q_IF(1:3,1))
+            dx_LF(1)=q_LF(1,1)
+            
+
+            qdot_IF(1:3,1)=qdot(1:3)+CROSS_PRODUCT(qdot(4:6),m_xyz(1:3,I))
+            qdot_LF(1:3,1)=MATMUL(T_IF_LF,qdot_IF(1:3,1))
+            dxdot_LF(1)=qdot_LF(1,1)
+            
+            ! Acceleration of the hull at the FHA location along the vector which the FHA acts in the FHA local frame
+            qdotdot_IF(1:3,1)=qdotdot(1:3)+CROSS_PRODUCT(qdotdot(4:6),m_xyz(1:3,I))
+            qdotdot_LF(1:3,1)=MATMUL(T_IF_LF,qdotdot_IF(1:3,1))
+            dxdotdot_LF(1)=qdotdot_LF(1,1)
+
+            !F_LF(n,1,I)=(k(I)*(u_FHA(n,I)-dx_LF(1))+c(I)*(up_FHA(n,I)-dxdot_LF(1)))! Local frame
+            F_LF(n,1,I)=k(I)*(u_FHA(n,I)-dx_LF(1))+c(I)*(up_FHA(n,I)-dxdot_LF(1))+cq(I)*(up_FHA(n,I)-dxdot_LF(1))*abs((up_FHA(n,I)-dxdot_LF(1)))! Local frame
+            F_LF(n,2,I)=0
+            F_LF(n,3,I)=0
+
+            ! Forces due to gravity 
+            F_LF(n,1:3,I)=F_LF(n,1:3,I)+MATMUL(T_IF_LF,g(1:3,1)*mass(I))
+            
+            ! Translational inertia force due to system acceleration along the FHA axes 2 and 3 (axis 1 is along the motion of the mass and is independent from the system)
+            qdotdot_IF(1:3,1)=qdotdot(1:3)+CROSS_PRODUCT(qdotdot(4:6),m_xyz(1:3,I))
+            qdotdot_LF(1:3,1)=MATMUL(T_IF_LF,qdotdot_IF(1:3,1))
+            F_LF(n,2,I)=F_LF(n,2,I)+-qdotdot_LF(2,1)*mass(I)
+            F_LF(n,3,I)=F_LF(n,3,I)+-qdotdot_LF(3,1)*mass(I)
+
+   
+            
+            ! Forces calculated about the WAMIT ref point in the inertia frame
+            F_IF(n,1:3,I)=MATMUL(T_LF_IF,F_LF(n,1:3,I))
+            F_IF(n,4:6,I)=CROSS_PRODUCT(m_xyz(1:3,I),F_IF(n,1:3,I))
+
+            ! Force at the WAMIT pt due to rotational stiffness
+            F_IF(n,4,I)=F_IF(n,4,I)+-mass(I)*-9.807*m_xyz(3,I)*q(4)
+            F_IF(n,5,I)=F_IF(n,5,I)+-mass(I)*-9.807*m_xyz(3,I)*q(5)  
+
+            ! Store output data
+            data_hold(n,(I-1)*3+1)=F_LF(n,1,I)
+            data_hold(n,(I-1)*3+2)=u_FHA(n,I)
+            data_hold(n,(I-1)*3+3)=up_FHA(n,I)
+
+        END DO
+
+        ! Sum all forces and moments due to all FHAs about the WAMIT ref pt
+        DO II=1, 6
+            DO I=1, n_FHA
+                F_FHA(II)=F_FHA(II)+F_IF(n,II,I)
+            END DO
+        END DO
+    END IF
+      
+
+
+    ! Update Time Last 
+     Time_last=Time     
+!
+   IF (Time==m%TMax) THEN
+       nvari=(n_FHA*3)
+    
+        
+       
+      OPEN(unit = 1,file = "Hull_TMD_Output.txt",STATUS='REPLACE')
+      WRITE(1,'(a10,TR5)',advance="no") 'Time (s)'
+      
+      DO I=1,n_FHA
+          IF (I==n_FHA) THEN
+            write(1,'(a10,TR5,a10,TR5,a10,TR5)') 'F (N)','x (m)','xp (m/s)'
+          ELSE
+            write(1,'(a10,TR5,a10,TR5,a10,TR5)',advance="no") 'F (N)','x (m)','xp (m/s)'
+          ENDIF
+      END DO
+      
+      out_fmt = '(F10.3,TR5,ES10.3E2,TR5)'
+
+      out_fmt = '(F10.3,TR5'  !,ES10.3E2,TR5)'
+      do I = 1,n_FHA*3
+          out_fmt = trim(out_fmt) // ',ES10.3E2,TR5'
+      end do
+      out_fmt = trim(out_fmt) // ')'
+
+      DO I=1,n-1
+         write(1,out_fmt) Time_n(I), data_hold(I,:)
+      END DO
+      CLOSE (1)
+   END IF
+   
+   !
+
+      
+END SUBROUTINE FHA_Force
+!----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE Euler_Transformation(T,Y4,Y5,Y6)
+
+    REAL(ReKi),INTENT(  OUT)                         :: T(3,3)
+    REAL(ReKi),INTENT(IN   )                         :: Y4             
+    REAL(ReKi),INTENT(IN   )                         :: Y5     
+    REAL(ReKi),INTENT(IN   )                         :: Y6     
+
+    T(1,1)=cos(Y5)*cos(Y6)
+    T(1,2)=-cos(Y5)*sin(Y6)
+    T(1,3)=sin(Y5)
+    T(2,1)=(cos(Y4)*sin(Y6))+(cos(Y6)*sin(Y4)*sin(Y5))
+    T(2,2)=(cos(Y4)*cos(Y6))-(sin(Y4)*sin(Y5)*sin(Y6))
+    T(2,3)=-cos(Y5)*sin(Y4)
+    T(3,1)=(sin(Y4)*sin(Y6))-(cos(Y4)*cos(Y6)*sin(Y5))
+    T(3,2)=(cos(Y6)*sin(Y4))+(cos(Y4)*sin(Y5)*sin(Y6))
+    T(3,3)=cos(Y4)*cos(Y5)
+
+END SUBROUTINE Euler_Transformation
+!----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE Read_FHA_Input(run_flag,n_FHA,u_FHA,up_FHA,upp_FHA,Time_n,mass,k,c,cq,m_xyz,u_bar,q_n,qdot_n,qdotdot_n,F_LF,F_IF,m,p,data_hold)
+    
+    INTEGER(IntKi),INTENT(  OUT)                                 :: run_flag(1) ! Flag to set to either use the FHA routine or ignore it.  Routine will run if any of the masses in input file are greater than 0
+    INTEGER(IntKi),INTENT(  OUT)                                 :: n_FHA        !! number of FHAs in system
+    INTEGER(IntKi)                                               :: n_max        !! number of time steps over simulation
+    INTEGER(IntKi)                                               :: III !Counter
+    
+    TYPE(HydroDyn_ParameterType),       INTENT(IN   )            :: p           !< Parameters
+    TYPE(HydroDyn_MiscVarType),         INTENT(IN   )            :: m           !< Initial misc/optimization variables
+
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: u_FHA(:,:)           !! FHA  displacement at time n (m) 
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: up_FHA(:,:)           !! FHA  velocity at time n (m)  
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: upp_FHA(:,:)          !! FHA  acceleration at time n (m) 
+    
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: mass(:)          !! FHA mass (kg)
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: k(:)           !! FHA stiffness (N/m)
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: c(:)           !! FHA damping (N/(m/s))
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: cq(:)           !! FHA nonlinear damping (N/(m/s))
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: m_xyz(:,:)            !! position of masses wrt WAMIT output pt. (m)
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: u_bar(:,:)            !! Euler angles defining orientation of FHA w.r.t. inertia frame
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: q_n(:,:), qdot_n(:,:), qdotdot_n(:,:)  !! Platform Positions, Velocities, and Accelerations at WAMIT Ref Pt (m,rad) from last time step    
+    REAL(DbKi),ALLOCATABLE,INTENT(  OUT)                         :: F_LF(:,:,:)         !< Force rxn at FHA in local frame
+    REAL(DbKi),ALLOCATABLE,INTENT(  OUT)                         :: F_IF(:,:,:)         !< Force rxn at FHA in inertia frame 
+    REAL(DbKi),ALLOCATABLE,INTENT(  OUT)                         :: Time_n(:)           !! FHA stiffness (N/m) 
+    REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: data_hold(:,:)          !! FHA mass (kg)
+    !REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: u0(:)           !! FHA  displacement at time 0 (m) 
+    !REAL(ReKi),ALLOCATABLE,INTENT(  OUT)                         :: up0(:)           !! FHA  velocity at time 0 (m/s)  
+
+    n_max=CEILING(m%TMAX/p%DT)+2
+!n_max=CEILING(10000/p%DT)*2
+    ! Read input data
+    !OPEN(unit = 1,file = "FHA_Input.dat")
+   !  PRINT *, inputFile
+    OPEN(unit = 1,file = "Hull_TMD_Input.dat")
+    
+    READ (1,*) 
+    READ (1,*) n_FHA
+    READ (1,*)
+    
+    ALLOCATE(u_FHA(n_max,n_FHA))
+    ALLOCATE(up_FHA(n_max,n_FHA))
+    ALLOCATE(upp_FHA(n_max,n_FHA))
+    ALLOCATE(q_n(n_max,6))
+    ALLOCATE(qdot_n(n_max,6))
+    ALLOCATE(qdotdot_n(n_max,6))  
+    ALLOCATE(F_LF(n_max,3,n_FHA))
+    ALLOCATE(F_IF(n_max,6,n_FHA))
+    ALLOCATE(Time_n(n_max))
+    ALLOCATE(mass(n_FHA))
+    ALLOCATE(k(n_FHA))
+    ALLOCATE(c(n_FHA))
+    ALLOCATE(cq(n_FHA))
+    ALLOCATE(m_xyz(3,n_FHA))
+    ALLOCATE(u_bar(3,n_FHA))
+    ALLOCATE(data_hold(n_max,n_FHA*3))
+    !
+    !ALLOCATE(u0(n_FHA))
+    !ALLOCATE(up0(n_FHA))
+
+    DO III=1,n_FHA
+        READ (1,*) mass(III),k(III),c(III), cq(III), m_xyz(1,III), m_xyz(2,III), m_xyz(3,III), u_bar(1,III), u_bar(2,III), u_bar(3,III) !, u0(III), up0(III)
+    END DO
+
+    CLOSE(1)
+    
+    ! Run flag, if any masses of FHAs from input file are greater than 0 then routine will run, else F_FHA is set to zeros(6,1)
+    IF (sum(mass)>0) THEN
+        run_flag(1)=1
+    ELSE
+        run_flag(1)=0
+    END IF
+        
+        
+!        DO III=1,n_FHA
+!         WRITE (*,'(E8.3,2X,E8.3,2X,E8.3,2X,F8.3,2X,F8.3,2X,F8.3,2X,F8.3,2X,F8.3,2X,F8.3)') mass(III),k,c, m_xyz(1,III), m_xyz(2,III), m_xyz(3,III), u_bar(1,III), u_bar(2,III), u_bar(3,III)
+!         !900 format (E5.2,1X,E5.2,1X,E5.2) !,F5.2,F5.2,F5.2,F5.2,F5.2,F5.2)
+!        END DO
+
+END SUBROUTINE Read_FHA_Input
+!----------------------------------------------------------------------------------------------------------------------------------      
+SUBROUTINE get_G(Up1,Un,Um1,dt,G,k,c,mass,F,n)   
+ 
+      REAL(DbKi),                         INTENT(IN   )  :: Un(2,1) ! Results at time step n
+      REAL(DbKi),                         INTENT(IN   )  :: Up1(2,1) ! Results at time step n+1 
+      REAL(DbKi),                         INTENT(IN   )  :: Um1(2,1) ! Results at time step n-1 
+      INTEGER,                            INTENT(IN   )  :: n        !< counter
+      REAL(ReKi),                         INTENT(IN   )  :: dt        !< time incriment      
+      REAL(DbKi),                         INTENT(IN   )  :: F(2,1)     !< Force vector    
+      REAL(DbKi),                         INTENT(  OUT)  :: G(2,1)          
+      REAL(ReKi),                         INTENT(IN   )  :: mass       !! FHA mass (kg)
+      REAL(ReKi),                         INTENT(IN   )  :: k          !! FHA stiffness (N/m)
+      REAL(ReKi),                         INTENT(IN   )  :: c          !! FHA damping (N/(m/s))
+            
+    IF (N<3) THEN ! Use 1st order accuracy
+        G(1,1)=(Up1(1,1)-Un(1,1))/dt-F(1,1)
+        G(2,1)=(Up1(2,1)-Un(2,1))/dt-F(2,1)
+    ELSE ! Use 2nd order accuracy
+        G(1,1)=(1.5*Up1(1,1)+-2*Un(1,1)+.5*Um1(1,1))/dt-F(1,1)
+        G(2,1)=(1.5*Up1(2,1)+-2*Un(2,1)+.5*Um1(2,1))/dt-F(2,1)
+    END IF
+      
+END SUBROUTINE get_G 
+!----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE get_J(Up1,Un,Um1,dt,J,k,c,cq,mass,dx_LF,dxdot_LF,n)   
+
+    REAL(DbKi),                         INTENT(IN   )  :: Un(2,1) ! Results at time step n
+    REAL(DbKi),                         INTENT(IN   )  :: Up1(2,1) ! Results at time step n+1 
+    REAL(DbKi),                         INTENT(IN   )  :: Um1(2,1) ! Results at time step n-1 
+    INTEGER,                           INTENT(IN   )  :: n        !< counter
+    REAL(ReKi),                         INTENT(IN   )   :: dt        !< time incriment
+    REAL(ReKi),                         INTENT(IN   )  :: mass           !! FHA mass (kg)
+    REAL(ReKi),                         INTENT(IN   )  :: k          !! FHA stiffness (N/m)
+    REAL(ReKi),                         INTENT(IN   )  :: c            !! FHA damping (N/(m/s))
+    REAL(ReKi),                         INTENT(IN   )  :: cq            !! FHA nonlinear damping (N/(m/s)^2)
+    REAL(DbKi)                                         :: J(2,2)         !< Jacobian matrix   
+    REAL(DbKi)                                         :: G1(2,1) 
+    REAL(DbKi)                                         :: G2(2,1)
+    REAL(DbKi)                                         :: F1(2,1) 
+    REAL(DbKi)                                         :: F2(2,1)
+    REAL(DbKi)                                         :: dU(2,1) 
+    INTEGER                                            :: I        ! Generic counters
+    REAL(ReKi),                         INTENT(IN   ) :: dx_LF(1)   !! Platform Position at FHA in inertia frame along the orientation of the FHA's motion
+    REAL(ReKi),                         INTENT(IN   ):: dxdot_LF(1)   !! Platform velocity at FHA in inertia frame along the orientation of the FHA's motion
+
+    DO I=1,2
+        dU(1,1)=0
+        dU(2,1)=0
+        dU(I,1)=.00001
+
+        CALL get_F(Up1,k,c,cq,mass,F1,dx_LF,dxdot_LF)
+        CALL get_G(Up1+dU,Un,Um1,dt,G1,k,c,mass,F1,n)
+        CALL get_F(Up1+dU,k,c,cq,mass,F2,dx_LF,dxdot_LF)
+        CALL get_G(Up1,Un,Um1,dt,G2,k,c,mass,F2,n)
+
+        J(1,I)=(G1(1,1)-G2(1,1))/dU(I,1)
+        J(2,I)=(G1(2,1)-G2(2,1))/dU(I,1)
+    END DO
+
+      
+END SUBROUTINE get_J 
+!----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE get_F(U,k,c,cq,mass,F,dx_LF,dxdot_LF)   
+ 
+    REAL(DbKi),                         INTENT(IN   )  :: U(2,1)       !< Predicted results for time step n      
+    REAL(DbKi),                         INTENT(  OUT)  :: F(2,1)         !< Force vector          
+    REAL(ReKi),                         INTENT(IN   )  :: mass           !! FHA mass (kg)
+    REAL(ReKi),                         INTENT(IN   )  :: k          !! FHA stiffness (N/m)
+    REAL(ReKi),                         INTENT(IN   )  :: c            !! FHA damping (N/(m/s))
+    REAL(ReKi),                         INTENT(IN   )  :: cq            !! FHA nonlinear damping (N/(m/s)^2)
+    REAL(DbKi)                                         :: M(2,2)           !! mass matrix
+    REAL(DbKi)                                         :: Minv(2,2)           !! Inverse of mass matrix
+    REAL(ReKi),                         INTENT(IN   ) :: dx_LF(1)   !! Platform Position at FHA in inertia frame along the orientation of the FHA's motion
+    REAL(ReKi),                         INTENT(IN   ):: dxdot_LF(1)   !! Platform velocity at FHA in inertia frame along the orientation of the FHA's motion
+    ! Assemble mass matrix M
+    M(1,1)=1;
+    M(1,2)=0;
+    M(2,1)=0;
+    M(2,2)=mass;
+
+    ! Calc Inverse of matrix M
+    Minv(1,1)=M(2,2)*(1/(M(1,1)*M(2,2)-M(1,2)*M(2,1)))
+    Minv(1,2)=-M(1,2)*(1/(M(1,1)*M(2,2)-M(1,2)*M(2,1)))
+    Minv(2,1)=-M(2,1)*(1/(M(1,1)*M(2,2)-M(1,2)*M(2,1)))
+    Minv(2,2)=M(1,1)*(1/(M(1,1)*M(2,2)-M(1,2)*M(2,1)))
+
+    F(1,1)=U(2,1)
+    !F(2,1)=-(k*(U(1,1)-dx_LF(1))+c*(U(2,1)-dxdot_LF(1)))
+ F(2,1)=-(k*(U(1,1)-dx_LF(1))+c*(U(2,1)-dxdot_LF(1))+cq*(U(2,1)-dxdot_LF(1))*abs((U(2,1)-dxdot_LF(1))))
+    F(1,1)=(Minv(1,1)*F(1,1))+(Minv(1,2)*F(2,1))
+    F(2,1)=(Minv(2,1)*F(1,1))+(Minv(2,2)*F(2,1))
+END SUBROUTINE get_F 
+!----------------------------------------------------------------------------------------------------------------------------------
+SUBROUTINE iterate_Up1(Un,Up1,Um1,k,c,cq,mass,dx_LF,dxdot_LF,m_xyz,dt,n) 
+
+    REAL(ReKi),                         INTENT(IN   )  :: dt
+    INTEGER,                            INTENT(IN   )  :: n
+    REAL(DbKi),                         INTENT(IN   )  :: Un(2,1)       !< Predicted results for time step n
+    REAL(DbKi),                         INTENT(INOUT)  :: Up1(2,1)       !< Predicted results for time step n+1
+    REAL(DbKi),                         INTENT(IN   )  :: Um1(2,1)       !< Predicted results for time step n-1 (currently not used)
+    REAL(DbKi)                                         :: F(2,1)         !< Force vector          
+    REAL(ReKi),                         INTENT(IN   )  :: mass           !! FHA mass (kg)
+    REAL(ReKi),                         INTENT(IN   )  :: k          !! FHA stiffness (N/m)
+    REAL(ReKi),                         INTENT(IN   )  :: c            !! FHA damping (N/(m/s))
+    REAL(ReKi),                         INTENT(IN   )  :: cq            !! FHA nonlinear damping (N/(m/s)^2)
+    REAL(ReKi),                         INTENT(IN   )  :: m_xyz(3,1)            !! position of masses wrt WAMIT output pt. (m)
+    REAL(DbKi)                                         :: err ! Reduction loop error
+    REAL(DbKi)                                         :: toll=1e-8 ! Reduction loop error tollerance for convergence 
+    REAL(DbKi)                                         :: max_iter=200 ! Max iterations in reduction loop error tollerance for convergence  
+    INTEGER                                            :: iter ! Reduction loop counter     
+    REAL(ReKi)                                         :: u_dummy(3)           !! dummy place holder for cross products      
+    REAL(DbKi)                                         :: G(2,1) ! Results at time step n
+    REAL(DbKi)                                         :: G_new(2,1) ! Results at time step n+1
+    REAL(DbKi)                                         :: J(2,2) !Jacobian matrix
+    REAL(DbKi)                                         :: Jinv(2,2) ! Inverse of the Jacobian matrix
+    REAL(ReKi),                         INTENT(IN   )  :: dx_LF(1)   !! Platform Position at FHA in inertia frame along the orientation of the FHA's motion
+    REAL(ReKi),                         INTENT(IN   )  :: dxdot_LF(1)   !! Platform velocity at FHA in inertia frame along the orientation of the FHA's motion
+
+
+
+
+    err=toll*2
+    iter=1
+    DO WHILE(err>toll.AND.iter<max_iter) ! Loop until convergence                            
+        ! Call force vector
+        CALL get_F(Up1,k,c,cq,mass,F,dx_LF,dxdot_LF)
+
+        ! Get G vector
+        CALL get_G(Up1,Un,Um1,dt,G,k,c,mass,F,n) 
+
+        ! Call the Jacobian
+        CALL get_J(Up1,Un,Um1,dt,J,k,c,cq,mass,dx_LF,dxdot_LF,n)  
+        ! Invert Jacobian so we can mult.
+        Jinv(1,1)=J(2,2)*(1/(J(1,1)*J(2,2)-J(1,2)*J(2,1)))
+        Jinv(1,2)=-J(1,2)*(1/(J(1,1)*J(2,2)-J(1,2)*J(2,1)))
+        Jinv(2,1)=-J(2,1)*(1/(J(1,1)*J(2,2)-J(1,2)*J(2,1)))
+        Jinv(2,2)=J(1,1)*(1/(J(1,1)*J(2,2)-J(1,2)*J(2,1)))
+
+        ! Update values of U at n+1
+        Up1(1,1)=Up1(1,1)-((Jinv(1,1)*G(1,1))+(Jinv(1,2)*G(2,1)))
+        Up1(2,1)=Up1(2,1)-((Jinv(2,1)*G(1,1))+(Jinv(2,2)*G(2,1)))
+
+        ! Call force vector
+        CALL get_F(Up1,k,c,cq,mass,F,dx_LF,dxdot_LF)
+
+        ! Get G vector
+        CALL get_G(Up1,Un,Um1,dt,G_new,k,c,mass,F,n)
+
+        ! Calculate error and update counter 
+        err=sqrt(((G(1,1)-G_new(1,1))*(G(1,1)-G_new(1,1)))+((G(2,1)-G_new(2,1))*(G(2,1)-G_new(2,1))))
+        iter=iter+1
+    END DO
+                               
+END SUBROUTINE iterate_Up1   
+!----------------------------------------------------------------------------------------------------------------------------------
+ 
 END MODULE HydroDyn
 !**********************************************************************************************************************************
