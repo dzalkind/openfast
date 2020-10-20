@@ -74,6 +74,7 @@ IMPLICIT NONE
     TYPE(Waves2_InitInputType)  :: Waves2      !< Initialization data for Waves module [-]
     TYPE(Current_InitInputType)  :: Current      !< Initialization data for Current module [-]
     CHARACTER(1024)  :: PotFile      !< The name of the root potential flow file (without extension for WAMIT, complete name for FIT) [-]
+    CHARACTER(1024)  :: TMDFile      !< The name of the Hull TMD input
     TYPE(WAMIT_InitInputType)  :: WAMIT      !< Initialization data for WAMIT module [-]
     TYPE(WAMIT2_InitInputType)  :: WAMIT2      !< Initialization data for WAMIT2 module [-]
     TYPE(Morison_InitInputType)  :: Morison      !< Initialization data for Morison module [-]
@@ -166,6 +167,7 @@ IMPLICIT NONE
     TYPE(WAMIT2_InputType)  :: u_WAMIT2      !< WAMIT2 module inputs [-]
     TYPE(Waves2_InputType)  :: u_Waves2      !< Waves2 module inputs [-]
     REAL(DbKi)  :: TMax      !< End Time [-]
+    CHARACTER(1024)  :: TMDFile      !< The name of the root potential flow file (without extension for WAMIT, complete name for FIT) [-]
   END TYPE HydroDyn_MiscVarType
 ! =======================
 ! =========  HydroDyn_ParameterType  =======
@@ -279,6 +281,7 @@ ENDIF
          CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg,RoutineName)
          IF (ErrStat>=AbortErrLev) RETURN
     DstInitInputData%PotFile = SrcInitInputData%PotFile
+    DstInitInputData%TMDFile = SrcInitInputData%TMDFile
       CALL WAMIT_CopyInitInput( SrcInitInputData%WAMIT, DstInitInputData%WAMIT, CtrlCode, ErrStat2, ErrMsg2 )
          CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg,RoutineName)
          IF (ErrStat>=AbortErrLev) RETURN
@@ -454,6 +457,7 @@ ENDIF
          DEALLOCATE(Int_Buf)
       END IF
       Int_BufSz  = Int_BufSz  + 1*LEN(InData%PotFile)  ! PotFile
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDFile)  ! PotFile
       Int_BufSz   = Int_BufSz + 3  ! WAMIT: size of buffers for each call to pack subtype
       CALL WAMIT_PackInitInput( Re_Buf, Db_Buf, Int_Buf, InData%WAMIT, ErrStat2, ErrMsg2, .TRUE. ) ! WAMIT 
         CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName)
@@ -716,6 +720,10 @@ ENDIF
       ENDIF
         DO I = 1, LEN(InData%PotFile)
           IntKiBuf(Int_Xferred) = ICHAR(InData%PotFile(I:I), IntKi)
+          Int_Xferred = Int_Xferred   + 1
+        END DO ! I
+        DO I = 1, LEN(InData%TMDFile)
+          IntKiBuf(Int_Xferred) = ICHAR(InData%TMDFile(I:I), IntKi)
           Int_Xferred = Int_Xferred   + 1
         END DO ! I
       CALL WAMIT_PackInitInput( Re_Buf, Db_Buf, Int_Buf, InData%WAMIT, ErrStat2, ErrMsg2, OnlySize ) ! WAMIT 
@@ -1141,6 +1149,10 @@ ENDIF
       IF(ALLOCATED(Int_Buf)) DEALLOCATE(Int_Buf)
       DO I = 1, LEN(OutData%PotFile)
         OutData%PotFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
+        Int_Xferred = Int_Xferred   + 1
+      END DO ! I
+      DO I = 1, LEN(OutData%TMDFile)
+        OutData%TMDFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
         Int_Xferred = Int_Xferred   + 1
       END DO ! I
       Buf_size=IntKiBuf( Int_Xferred )

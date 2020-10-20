@@ -364,6 +364,8 @@ SUBROUTINE HydroDyn_Init( InitInp, u, p, x, xd, z, OtherState, y, m, Interval, I
                  
       InitLocal%DT  = Interval
       
+      ! DZ Change: Copy Hull TMD filename to parameters
+      m%TMDFile      = InitLocal%TMDFile
       
          ! Verify all the necessary initialization data. Do this at the HydroDynInput module-level 
          !   because the HydroDynInput module is also responsible for parsing all this 
@@ -2486,8 +2488,8 @@ SUBROUTINE Read_FHA_Input(run_flag,n_FHA,u_FHA,up_FHA,upp_FHA,Time_n,mass,k,c,cq
 !n_max=CEILING(10000/p%DT)*2
     ! Read input data
     !OPEN(unit = 1,file = "FHA_Input.dat")
-   !  PRINT *, inputFile
-    OPEN(unit = 1,file = "Hull_TMD_Input.dat")
+    PRINT *, "Reading TMD File:"//trim(m%TMDFile)
+    OPEN(unit = 1,file = trim(m%TMDFile))
     
     READ (1,*) 
     READ (1,*) n_FHA

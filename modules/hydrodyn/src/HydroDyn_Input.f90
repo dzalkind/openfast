@@ -830,6 +830,15 @@ SUBROUTINE HydroDynInput_GetInput( InitInp, ErrStat, ErrMsg )
          RETURN
       END IF
 
+            ! PotFile - Root name of Potential flow data files (Could be WAMIT files or the FIT input file)
+
+   CALL ReadVar ( UnIn, FileName, InitInp%TMDFile, 'TMDFile', 'Name of hull TMD file ', ErrStat2, ErrMsg2, UnEchoLocal )
+   CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, 'HydroDynInput_GetInput' )
+   IF (ErrStat >= AbortErrLev) THEN
+      CALL CleanUp()
+      RETURN
+   END IF
+
 
       ! WAMITULEN - WAMIT characteristic body length scale
 
