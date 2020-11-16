@@ -1805,8 +1805,19 @@ SUBROUTINE HydroDyn_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat,
       y%Mesh%Force (:,1) = m%F_PtfmAdd(1:3)
       y%Mesh%Moment(:,1) = m%F_PtfmAdd(4:6)
     
+         ! Compute the wave elevations at the requested output locations for this time.  Note that p%WaveElev has the second order added to it already.
+         ! DZ: moved up so we can use to control TMD params
+      DO I=1,p%NWaveElev   
+         WaveElev1(I)   = InterpWrappedStpReal ( REAL(Time, SiKi), p%WaveTime(:), p%WaveElev1(:,I),          &
+                                    m%LastIndWave, p%NStepWave + 1       )                      
+         WaveElev(I)    = InterpWrappedStpReal ( REAL(Time, SiKi), p%WaveTime(:), p%WaveElev(:,I), &
+                                    m%LastIndWave, p%NStepWave + 1       )
+
+      END DO
+
+
          ! CKA 3/9/2018 - Start Change - Apply fluid harmonic absorber loading as external force
-        CALL FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot) 
+        CALL FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot,WaveElev(1)) 
           !write(*,*) Time, F_FHA(3,1)       
         y%Mesh%Force (:,1) =y%Mesh%Force (:,1) + F_FHA(1:3,1)
         y%Mesh%Moment(:,1) =y%Mesh%Moment(:,1) + F_FHA(4:6,1)
@@ -1888,15 +1899,7 @@ SUBROUTINE HydroDyn_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat,
          CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, 'HydroDyn_CalcOutput' )                  
       
       
-         ! Compute the wave elevations at the requested output locations for this time.  Note that p%WaveElev has the second order added to it already.
-         
-      DO I=1,p%NWaveElev   
-         WaveElev1(I)   = InterpWrappedStpReal ( REAL(Time, SiKi), p%WaveTime(:), p%WaveElev1(:,I),          &
-                                    m%LastIndWave, p%NStepWave + 1       )                      
-         WaveElev(I)    = InterpWrappedStpReal ( REAL(Time, SiKi), p%WaveTime(:), p%WaveElev(:,I), &
-                                    m%LastIndWave, p%NStepWave + 1       )
-
-      END DO
+      
       
       
           
@@ -2167,7 +2170,7 @@ CONTAINS
 END FUNCTION CalcLoadsAtWRP
    
 !----------------------------------------------------------------------------------------------------------------------------------
-SUBROUTINE FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot)   
+SUBROUTINE FHA_Force(Time, u, p, x, xd, z, OtherState, y, m, ErrStat, ErrMsg,F_FHA,q,qdot,qdotdot,w)   
 USE NWTC_Library
 
     TYPE(HydroDyn_InputType),           INTENT(IN   )  :: u           !< Inputs at Time (note that this is intent out because we're copying the u%mesh into m%u_wamit%mesh)
@@ -2178,6 +2181,8 @@ USE NWTC_Library
     TYPE(HydroDyn_OtherStateType),      INTENT(IN   )  :: OtherState  !< Other states at Time
     TYPE(HydroDyn_OutputType),          INTENT(IN   )  :: y           !< Outputs computed at Time (Input only so that mesh con-
     TYPE(HydroDyn_MiscVarType),         INTENT(INOUT)  :: m           !< Initial misc/optimization variables
+
+    REAL(SiKi),                         INTENT(IN)     :: w           !< Disturbance (wave) input for controlling TMD frequency
 
     CHARACTER(*),                       INTENT(  OUT)  :: ErrMsg      !! Error message if ErrStat /= ErrID_None
 
@@ -2225,6 +2230,27 @@ USE NWTC_Library
     REAL(DbKi),SAVE,ALLOCATABLE                        :: F_IF(:,:,:)         !< Force rxn at FHA in inertia frame  
     REAL(DbKi),SAVE,ALLOCATABLE                        :: Time_n(:)         !< Array of time stamps over the simulation
 
+    ! Sea State Est Vars
+    REAL(DbKi),  DIMENSION(:), ALLOCATABLE, SAVE      :: control_per
+    REAL(DbKi),  DIMENSION(:), ALLOCATABLE, SAVE      :: w_buff
+
+    LOGICAL                                           :: reset
+    INTEGER(IntKi)                                    :: status, n_buff, inst
+    REAL(DbKi)                                        :: I0, minValue, maxValue, kp, ki, freq, damp, t_buff, Hs_est
+    REAL(DbKi)                                        :: gamma, kappa, f0, dw, w_fll, w_hat, T_est, wn_control
+    REAL(DbKi), SAVE                                  :: w_next
+    CHARACTER(1024)                                   :: OL_InputFileName, control_filename
+    REAL(DbKi), DIMENSION(2,2)                        :: A_fll, C_fll
+    REAL(DbKi), DIMENSION(2,1)                        :: B_fll, dx_fll, x_fll, y_fll
+    REAL(DbKi), DIMENSION(2,1), SAVE                  :: x_next
+    REAL(DbKi), DIMENSION(1,1)                        :: u_fll, dw_temp
+
+    ! TMD Control Vars
+    REAL(DbKi),  DIMENSION(:,:), ALLOCATABLE, SAVE    :: Channels
+    REAL(DbKi),  DIMENSION(:), ALLOCATABLE, SAVE      :: control_freq
+    REAL(DbKi), SAVE                                  :: zeta, c_control, k_control  ! damping ratio, controlled damping, spring const.
+
+
     INTEGER                                            :: nvari        ! number of output variables
     CHARACTER(9000)                                    :: out_fmt
     CHARACTER(*), PARAMETER ::                                        FMT_OUT='aaaaaaa' 
@@ -2244,6 +2270,24 @@ USE NWTC_Library
     IF (n == 1) THEN
         ! Read input file
         CALL Read_FHA_Input(run_flag,n_FHA,u_FHA,up_FHA,upp_FHA,Time_n,mass,k,c,cq,m_xyz,u_bar,q_n,qdot_n,qdotdot_n,F_LF,F_IF,m,p,data_hold)
+
+        ! Read Control Input
+         control_filename    = '/Users/dzalkind/Tools/Fortran/control.dat'
+         call read_input_ts(control_filename,Channels,control_per)
+         control_freq        = Channels(:,1)
+
+         ! Set initial params based on FHA Input
+         zeta = c(1)/ (2 * sqrt(k(1) * mass(1)))
+         c_control = c(1)
+         k_control = k(1)
+
+         
+   
+         ! Set buffer params
+         t_buff = 200 ! sec
+         n_buff = floor(t_buff/DT)
+         call init_buffer(w_buff,n_buff)
+         w_buff(:) = 0.0
         
         ! Inital positions and velocities along the vector which the FHA acts in the FHA local frame
         DO I=1,n_FHA  
@@ -2271,6 +2315,104 @@ USE NWTC_Library
         g(2,1)=0
         g(3,1)=-9.807
     END IF
+
+    ! Sea State Estimator
+    ! Init. vars
+    if (n==1) THEN         
+
+         ! Init State Space Vars
+         x_fll          = reshape((/0,0/),(/2,1/))
+         x_next         = reshape((/0,0/),(/2,1/))
+         dx_fll         = reshape((/0,0/),(/2,1/))
+         y_fll          = reshape((/0,0/),(/2,1/))
+
+         w_fll    = 1
+         w_next   = 1
+
+      else
+         reset = .FALSE.
+         status  = 1
+      end if
+
+      ! fll params
+    f0  = 1
+    gamma = 0.16
+    kappa = 1.4 
+    freq     = 2 * 3.1415 / 300
+    damp     = .707
+
+   IF (Time/=Time_last) THEN
+
+      ! Initialize Filter
+      IF (Time < 2*DT) THEN
+         reset    = .TRUE.
+         I0       = w
+         status   = 0
+      END IF
+      ! print *, time
+       inst = 1
+        ! Discrete State Space Rep.
+        
+        ! state update 
+        w_fll        = max(w_next,1e-3)  ! force to be > 0
+        x_fll       = x_next
+
+        A_fll       = reshape((/-kappa*w_fll, 1d0, -w_fll*w_fll, 0d0/),(/2,2/))
+        B_fll       = reshape((/kappa * w_fll, 0d0/),(/2,1/))
+        C_fll       = reshape((/1d0,0d0,0d0,w_fll/),(/2,2/))
+
+        u_fll       = reshape((/w/),(/1,1/))        
+        dx_fll      = matmul(A_fll,x_fll) + matmul(B_fll,u_fll)
+        y_fll       = matmul(C_fll,x_fll)
+        dw         = -gamma * (w - x_fll(1,1)) * y_fll(2,1)
+
+        ! Integrate: forward euler for now
+        if (Time<m%TMax) THEN
+
+
+            x_next      = x_fll + dx_fll * dt
+            w_next       = w_fll + dw * dt
+
+        END IF
+
+        ! Filter
+        w_hat = SecLPFilter(w_fll, DT, freq, damp, status, reset, inst)
+
+        ! Est Period and saturate
+        if (w_hat > 1e-8) THEN
+            T_est   = 1.1 * 2 * 3.1415 / w_hat
+        ELSE
+            T_est   = 20.
+        END IF
+
+        IF (T_est > 20) THEN
+            T_est   = 20.
+        end if
+
+        ! compute control from lookup table interpolation
+        wn_control = interp1d(control_per,control_freq,T_est)
+
+        k_control    = wn_control * wn_control * mass(1)
+        c_control    = zeta * 2 * sqrt(k_control * mass(1))
+
+        c(:)         = c_control
+        k(:)         = k_control
+
+
+        ! sig height est
+        call pp_buffer(w_buff,w)
+        Hs_est = 4 * std(w_buff)
+
+
+        ! write output
+      !   WRITE(198,*) w_fll, DT, freq, damp, status, reset, inst
+      !   WRITE(199,'(99(F10.6,TR5:))') time , w, w_fll, dw, dt! , wn_control, Hs_est
+        WRITE(200,'(99(F10.6,TR5:))') time , w, w_hat, T_est, Hs_est, wn_control
+        WRITE(201,*) time , k(1), c(1), zeta, k_control, c_control
+
+
+
+   END IF    
     
         ! Store system positions, velocities, and accelerations at WAMIT ref. pt
     DO I=1,6
@@ -2690,6 +2832,324 @@ SUBROUTINE iterate_Up1(Un,Up1,Um1,k,c,cq,mass,dx_LF,dxdot_LF,m_xyz,dt,n)
                                
 END SUBROUTINE iterate_Up1   
 !----------------------------------------------------------------------------------------------------------------------------------
- 
+real function std(arr)
+        REAL(DbKi), DIMENSION(:), INTENT(IN)       :: arr
+        INTEGER(IntKi)                              :: i
+        REAL(DbKi)                                 :: sum, sum_sq, var
+
+        sum = 0.0
+        sum_sq = 0.0
+
+        do i = 1,size(arr)
+            sum     = sum + arr(i)
+            sum_sq  = sum_sq + arr(i) * arr(i)
+        end do
+
+        var     = (sum_sq - sum * sum / size(arr))/(size(arr)-1)
+        std     = sqrt(var)
+
+    end function std
+!----------------------------------------------------------------------------------------------------------------------------------
+    subroutine init_buffer(buff,n_buff)
+      REAL(DbKi),ALLOCATABLE,INTENT(  OUT)                         :: buff(:)
+      INTEGER(IntKi), INTENT(IN)                                   :: n_buff
+      ALLOCATE(buff(n_buff))
+
+   end subroutine init_buffer
+
+    !----------------------------------------------------------------------------------------------------------------------------------
+    subroutine pp_buffer(buffer,new_sig)
+        ! push and pop buffer, new signal goes at end, all other signal indices decrease by 1
+        
+        REAL(DbKi), DIMENSION(:), INTENT(INOUT)            :: buffer
+        REAL(ReKi), INTENT(IN)                             :: new_sig
+        INTEGER(IntKi)                                      :: i
+
+        do i=2,size(buffer)
+            buffer(i-1) = buffer(i)
+        end do
+        buffer(size(buffer)) = new_sig
+
+
+
+    end subroutine pp_buffer
+!----------------------------------------------------------------------------------------------------------------------------------
+    REAL FUNCTION SecLPFilter(InputSignal, DT, CornerFreq, Damp, iStatus, reset, inst)
+    ! Discrete time Low-Pass Filter of the form:
+    !                               Continuous Time Form:   H(s) = CornerFreq^2/(s^2 + 2*CornerFreq*Damp*s + CornerFreq^2)
+    !                               Discrete Time From:     H(z) = (b2*z^2 + b1*z + b0) / (a2*z^2 + a1*z + a0)
+        REAL(DbKi), INTENT(IN)         :: InputSignal
+        REAL(ReKi), INTENT(IN)         :: DT                       ! time step [s]
+        REAL(DbKi), INTENT(IN)         :: CornerFreq               ! corner frequency [rad/s]
+        REAL(DbKi), INTENT(IN)         :: Damp                     ! Dampening constant
+        INTEGER(IntKi), INTENT(IN)      :: iStatus                  ! A status flag set by the simulation as follows: 0 if this is the first call, 1 for all subsequent time steps, -1 if this is the final call at the end of the simulation.
+        INTEGER(IntKi), INTENT(INOUT)   :: inst                     ! Instance number. Every instance of this function needs to have an unique instance number to ensure instances don't influence each other.
+        LOGICAL(4), INTENT(IN)      :: reset                    ! Reset the filter to the input signal
+
+        ! Local
+        REAL(DbKi), DIMENSION(99), SAVE    :: a2                   ! Denominator coefficient 2
+        REAL(DbKi), DIMENSION(99), SAVE    :: a1                   ! Denominator coefficient 1
+        REAL(DbKi), DIMENSION(99), SAVE    :: a0                   ! Denominator coefficient 0
+        REAL(DbKi), DIMENSION(99), SAVE    :: b2                   ! Numerator coefficient 2
+        REAL(DbKi), DIMENSION(99), SAVE    :: b1                   ! Numerator coefficient 1
+        REAL(DbKi), DIMENSION(99), SAVE    :: b0                   ! Numerator coefficient 0 
+        REAL(DbKi), DIMENSION(99), SAVE    :: InputSignalLast1     ! Input signal the last time this filter was called. Supports 99 separate instances.
+        REAL(DbKi), DIMENSION(99), SAVE    :: InputSignalLast2     ! Input signal the next to last time this filter was called. Supports 99 separate instances.
+        REAL(DbKi), DIMENSION(99), SAVE    :: OutputSignalLast1    ! Output signal the last time this filter was called. Supports 99 separate instances.
+        REAL(DbKi), DIMENSION(99), SAVE    :: OutputSignalLast2    ! Output signal the next to last time this filter was called. Supports 99 separate instances.
+
+        ! Initialization
+        IF ((iStatus == 0) .OR. reset )  THEN
+            OutputSignalLast1(inst)  = InputSignal
+            OutputSignalLast2(inst)  = InputSignal
+            InputSignalLast1(inst)   = InputSignal
+            InputSignalLast2(inst)   = InputSignal
+            
+            ! Coefficients
+            a2(inst) = DT**2.0*CornerFreq**2.0 + 4.0 + 4.0*Damp*CornerFreq*DT
+            a1(inst) = 2.0*DT**2.0*CornerFreq**2.0 - 8.0
+            a0(inst) = DT**2.0*CornerFreq**2.0 + 4.0 - 4.0*Damp*CornerFreq*DT
+            b2(inst) = DT**2.0*CornerFreq**2.0
+            b1(inst) = 2.0*DT**2.0*CornerFreq**2.0
+            b0(inst) = DT**2.0*CornerFreq**2.0
+        ENDIF
+
+        ! Filter
+        SecLPFilter = 1.0/a2(inst) * (b2(inst)*InputSignal + b1(inst)*InputSignalLast1(inst) + b0(inst)*InputSignalLast2(inst) & 
+        - a1(inst)*OutputSignalLast1(inst) - a0(inst)*OutputSignalLast2(inst))
+
+        ! SecLPFilter = 1/(4+4*DT*Damp*CornerFreq+DT**2*CornerFreq**2) * ( (8-2*DT**2*CornerFreq**2)*OutputSignalLast1(inst) &
+        !                 + (-4+4*DT*Damp*CornerFreq-DT**2*CornerFreq**2)*OutputSignalLast2(inst) + (DT**2*CornerFreq**2)*InputSignal &
+        !                     + (2*DT**2*CornerFreq**2)*InputSignalLast1(inst) + (DT**2*CornerFreq**2)*InputSignalLast2(inst) )
+
+        ! Save signals for next time step
+        InputSignalLast2(inst)   = InputSignalLast1(inst)
+        InputSignalLast1(inst)   = InputSignal
+        OutputSignalLast2(inst)  = OutputSignalLast1(inst)
+        OutputSignalLast1(inst)  = SecLPFilter
+
+        inst = inst + 1
+
+    END FUNCTION SecLPFilter
+!----------------------------------------------------------------------------------------------------------------------------------
+    REAL FUNCTION PIController(error, kp, ki, minValue, maxValue, DT, I0, reset, inst)
+    ! PI controller, with output saturation
+
+        IMPLICIT NONE
+        ! Allocate Inputs
+        REAL(DbKi), INTENT(IN)         :: error
+        REAL(DbKi), INTENT(IN)         :: kp
+        REAL(DbKi), INTENT(IN)         :: ki
+        REAL(DbKi), INTENT(IN)         :: minValue
+        REAL(DbKi), INTENT(IN)         :: maxValue
+        REAL(DbKi), INTENT(IN)         :: DT
+        INTEGER(IntKi), INTENT(INOUT)   :: inst
+        REAL(DbKi), INTENT(IN)         :: I0
+        LOGICAL, INTENT(IN)         :: reset     
+        ! Allocate local variables
+        INTEGER(IntKi)                      :: i                                            ! Counter for making arrays
+        REAL(DbKi)                         :: PTerm                                        ! Proportional term
+        REAL(DbKi), DIMENSION(99), SAVE    :: ITerm = (/ (real(9999.9), i = 1,99) /)       ! Integral term, current.
+        REAL(DbKi), DIMENSION(99), SAVE    :: ITermLast = (/ (real(9999.9), i = 1,99) /)   ! Integral term, the last time this controller was called. Supports 99 separate instances.
+        INTEGER(IntKi), DIMENSION(99), SAVE :: FirstCall = (/ (1, i=1,99) /)                ! First call of this function?
+        
+        ! Initialize persistent variables/arrays, and set inital condition for integrator term
+        IF ((FirstCall(inst) == 1) .OR. reset) THEN
+            ITerm(inst) = I0
+            ITermLast(inst) = I0
+            
+            FirstCall(inst) = 0
+            PIController = I0
+        ELSE
+            PTerm = kp*error
+            ITerm(inst) = ITerm(inst) + DT*ki*error
+            ITerm(inst) = saturate(ITerm(inst), minValue, maxValue)
+            PIController = saturate(PTerm + ITerm(inst), minValue, maxValue)
+        
+            ITermLast(inst) = ITerm(inst)
+        END IF
+        inst = inst + 1
+        
+    END FUNCTION PIController
+!----------------------------------------------------------------------------------------------------------------------------------
+    REAL FUNCTION saturate(inputValue, minValue, maxValue)
+    ! Saturates inputValue. Makes sure it is not smaller than minValue and not larger than maxValue
+
+        IMPLICIT NONE
+
+        REAL(DbKi), INTENT(IN)     :: inputValue
+        REAL(DbKi), INTENT(IN)     :: minValue
+        REAL(DbKi), INTENT(IN)     :: maxValue
+
+        saturate = MIN(MAX(inputValue,minValue), maxValue)
+
+    END FUNCTION saturate
+!-------------------------------------------------------------------------------------------------------------------------------
+    REAL FUNCTION interp1d(xData, yData, xq)
+    ! interp1d 1-D interpolation (table lookup), xData should be monotonically increasing
+
+        IMPLICIT NONE
+        ! Inputs
+        REAL(DbKi), DIMENSION(:), INTENT(IN)       :: xData        ! Provided x data (vector), to be interpolated
+        REAL(DbKi), DIMENSION(:), INTENT(IN)       :: yData        ! Provided y data (vector), to be interpolated
+        REAL(DbKi), INTENT(IN)                     :: xq           ! x-value for which the y value has to be interpolated
+        INTEGER(IntKi)                              :: I            ! Iteration index
+        
+        ! Interpolate
+        IF (xq <= MINVAL(xData)) THEN
+            interp1d = yData(1)
+        ELSEIF (xq >= MAXVAL(xData)) THEN
+            interp1d = yData(SIZE(xData))
+        ELSE
+            DO I = 1, SIZE(xData)
+                IF (xq <= xData(I)) THEN
+                    interp1d = yData(I-1) + (yData(I) - yData(I-1))/(xData(I) - xData(I-1))*(xq - xData(I-1))
+                    EXIT
+                ELSE
+                    CONTINUE
+                END IF
+            END DO
+        END IF
+        
+    END FUNCTION interp1d
+!----------------------------------------------------------------------------------------------------------------------------------
+
+    subroutine read_input_ts(OL_InputFileName,Channels,Breakpoints)
+        INTEGER(IntKi)                          :: accINFILE_size               ! size of DISCON input filename
+        INTEGER(IntKi), PARAMETER               :: UnControllerParameters = 89
+        INTEGER(IntKi)                          :: LoggingLevel
+        CHARACTER(1024), INTENT(IN)         :: OL_InputFileName    ! DISCON input filename
+        INTEGER(IntKi), PARAMETER   :: Unit_OL_Input           = 1009
+
+        LOGICAL                 :: FileExists
+        INTEGER                 :: IOS                                                 ! I/O status of OPEN.
+        CHARACTER(1024)         :: Line              ! Temp variable for reading whole line from file
+        INTEGER(IntKi)                                              :: NumComments
+        INTEGER(IntKi)                                              :: NumDataLines
+        INTEGER(IntKi), PARAMETER                                   :: NumChannels  = 1      ! Number of open loop channels being defined
+        INTEGER(IntKi), PARAMETER                                   :: NumCols      = NumChannels + 1
+        REAL(DbKi)                                                 :: TmpData(NumCols)  ! Temp variable for reading all columns from a line
+        CHARACTER(15)                :: NumString
+
+
+
+        REAL(DbKi),  DIMENSION(:,:), ALLOCATABLE, INTENT(OUT)     :: Channels    ! Rating at  Breakpoints
+        REAL(DbKi),  DIMENSION(:), ALLOCATABLE, INTENT(OUT)     :: Breakpoints         ! Time index
+        INTEGER(IntKi)                                              :: I,J
+
+        ! OL_InputFileName = TRIM(OL_InputFileName)
+
+
+        !-------------------------------------------------------------------------------------------------
+        ! Read timeseries from input file, borrowed (read: copied) from (Open)FAST team...thanks!
+        !-------------------------------------------------------------------------------------------------
+
+        !-------------------------------------------------------------------------------------------------
+        ! Open the file for reading
+        !-------------------------------------------------------------------------------------------------
+
+        INQUIRE (FILE = OL_InputFileName, EXIST = FileExists)
+
+        IF ( .NOT. FileExists) THEN
+            PRINT *, TRIM(OL_InputFileName)// ' does not exist, setting R = 1 for all time'
+            ALLOCATE(Channels(2,1))
+            ALLOCATE(Breakpoints(2))
+            Channels(1,1) = 1;        Channels(2,1) = 1
+            Breakpoints(1)      = 0;        Breakpoints(2)       = 90000;
+
+        else
+            print *, 'opening file'
+            OPEN( Unit_OL_Input, FILE=TRIM(OL_InputFileName), STATUS='OLD', FORM='FORMATTED', IOSTAT=IOS, ACTION='READ' )
+
+            IF (IOS /= 0) THEN
+                PRINT *, 'Cannot open ' // TRIM(OL_InputFileName) // ', setting R = 1 for all time'
+                ALLOCATE(Channels(2,1))
+                ALLOCATE(Breakpoints(2))
+                Channels(1,1) = 1;        Channels(2,1) = 1
+                Breakpoints(1)      = 0;        Breakpoints(2)       = 90000;
+                CLOSE(Unit_OL_Input)
+            
+            else
+                ! Do all the stuff!
+
+                !-------------------------------------------------------------------------------------------------
+                ! Find the number of comment lines
+                !-------------------------------------------------------------------------------------------------
+                LINE = '!'                          ! Initialize the line for the DO WHILE LOOP
+                NumComments = -1                    ! the last line we read is not a comment, so we'll initialize this to -1 instead of 0
+
+                DO WHILE ( (INDEX( LINE, '!' ) > 0) .OR. (INDEX( LINE, '#' ) > 0) .OR. (INDEX( LINE, '%' ) > 0) ) ! Lines containing "!" are treated as comment lines
+                NumComments = NumComments + 1
+                
+                READ(Unit_OL_Input,'( A )',IOSTAT=IOS) LINE
+
+                ! NWTC_IO has some error catching here that we'll skip for now
+            
+                END DO !WHILE
+
+                    !-------------------------------------------------------------------------------------------------
+                ! Find the number of data lines
+                !-------------------------------------------------------------------------------------------------
+                NumDataLines = 0
+
+                READ(LINE,*,IOSTAT=IOS) ( TmpData(I), I=1,NumCols ) ! this line was read when we were figuring out the comment lines; let's make sure it contains
+
+                DO WHILE (IOS == 0)  ! read the rest of the file (until an error occurs)
+                NumDataLines = NumDataLines + 1
+                
+                READ(Unit_OL_Input,*,IOSTAT=IOS) ( TmpData(I), I=1,NumCols )
+                
+                END DO !WHILE
+            
+            
+                IF (NumDataLines < 1) THEN
+                WRITE (NumString,'(I11)')  NumComments
+                PRINT *, 'Error: '//TRIM(NumString)//' comment lines were found in the uniform wind file, '// &
+                            'but the first data line does not contain the proper format.'
+                CLOSE(Unit_OL_Input)
+                END IF
+
+                !-------------------------------------------------------------------------------------------------
+                ! Allocate arrays for the uniform wind data
+                !-------------------------------------------------------------------------------------------------
+                ALLOCATE(Channels(NumDataLines,NumChannels))
+                ALLOCATE(Breakpoints(NumDataLines))
+
+                !-------------------------------------------------------------------------------------------------
+                ! Rewind the file (to the beginning) and skip the comment lines
+                !-------------------------------------------------------------------------------------------------
+
+                REWIND( Unit_OL_Input )
+
+                DO I=1,NumComments
+                    READ(Unit_OL_Input,'( A )',IOSTAT=IOS) LINE
+                END DO !I
+            
+
+                !-------------------------------------------------------------------------------------------------
+                ! Read the data arrays
+                !-------------------------------------------------------------------------------------------------
+            
+                DO I=1,NumDataLines
+                
+                    READ(Unit_OL_Input,*,IOSTAT=IOS) ( TmpData(J), J=1,NumCols )
+
+                    if (IOS > 0) THEN
+                        CLOSE(Unit_OL_Input)
+                    endif
+
+                    Breakpoints(I)          = TmpData(1)
+                    Channels(I,:)           = TmpData(2:)
+            
+                END DO !I
+                
+                ! Rewind for next time
+                REWIND( Unit_OL_Input )
+            
+
+            end if
+        end if
+    end subroutine read_input_ts
+
 END MODULE HydroDyn
 !**********************************************************************************************************************************
