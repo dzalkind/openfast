@@ -74,7 +74,8 @@ IMPLICIT NONE
     TYPE(Waves2_InitInputType)  :: Waves2      !< Initialization data for Waves module [-]
     TYPE(Current_InitInputType)  :: Current      !< Initialization data for Current module [-]
     CHARACTER(1024)  :: PotFile      !< The name of the root potential flow file (without extension for WAMIT, complete name for FIT) [-]
-    CHARACTER(1024)  :: TMDFile      !< The name of the Hull TMD input
+    CHARACTER(1024)  :: TMDFile      !< The name of tuned mass damper (TMD) input file [-]
+    CHARACTER(1024)  :: TMDControlFile      !< The name of the TMD control file, write unused to ignore and use constant TMD above [-]
     TYPE(WAMIT_InitInputType)  :: WAMIT      !< Initialization data for WAMIT module [-]
     TYPE(WAMIT2_InitInputType)  :: WAMIT2      !< Initialization data for WAMIT2 module [-]
     TYPE(Morison_InitInputType)  :: Morison      !< Initialization data for Morison module [-]
@@ -167,7 +168,9 @@ IMPLICIT NONE
     TYPE(WAMIT2_InputType)  :: u_WAMIT2      !< WAMIT2 module inputs [-]
     TYPE(Waves2_InputType)  :: u_Waves2      !< Waves2 module inputs [-]
     REAL(DbKi)  :: TMax      !< End Time [-]
-    CHARACTER(1024)  :: TMDFile      !< The name of the root potential flow file (without extension for WAMIT, complete name for FIT) [-]
+    CHARACTER(1024)  :: TMDFile      !< The name of tuned mass damper (TMD) input file [-]
+    CHARACTER(1024)  :: TMDControlFile      !< The name of the TMD control file, write unused to ignore and use constant TMD above [-]
+    CHARACTER(1024)  :: OutRootName      !< The name of the root file (without extension) including the full path [-]
   END TYPE HydroDyn_MiscVarType
 ! =======================
 ! =========  HydroDyn_ParameterType  =======
@@ -282,6 +285,7 @@ ENDIF
          IF (ErrStat>=AbortErrLev) RETURN
     DstInitInputData%PotFile = SrcInitInputData%PotFile
     DstInitInputData%TMDFile = SrcInitInputData%TMDFile
+    DstInitInputData%TMDControlFile = SrcInitInputData%TMDControlFile
       CALL WAMIT_CopyInitInput( SrcInitInputData%WAMIT, DstInitInputData%WAMIT, CtrlCode, ErrStat2, ErrMsg2 )
          CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg,RoutineName)
          IF (ErrStat>=AbortErrLev) RETURN
@@ -457,7 +461,8 @@ ENDIF
          DEALLOCATE(Int_Buf)
       END IF
       Int_BufSz  = Int_BufSz  + 1*LEN(InData%PotFile)  ! PotFile
-      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDFile)  ! PotFile
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDFile)  ! TMDFile
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDControlFile)  ! TMDControlFile
       Int_BufSz   = Int_BufSz + 3  ! WAMIT: size of buffers for each call to pack subtype
       CALL WAMIT_PackInitInput( Re_Buf, Db_Buf, Int_Buf, InData%WAMIT, ErrStat2, ErrMsg2, .TRUE. ) ! WAMIT 
         CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg, RoutineName)
@@ -724,6 +729,10 @@ ENDIF
         END DO ! I
         DO I = 1, LEN(InData%TMDFile)
           IntKiBuf(Int_Xferred) = ICHAR(InData%TMDFile(I:I), IntKi)
+          Int_Xferred = Int_Xferred   + 1
+        END DO ! I
+        DO I = 1, LEN(InData%TMDControlFile)
+          IntKiBuf(Int_Xferred) = ICHAR(InData%TMDControlFile(I:I), IntKi)
           Int_Xferred = Int_Xferred   + 1
         END DO ! I
       CALL WAMIT_PackInitInput( Re_Buf, Db_Buf, Int_Buf, InData%WAMIT, ErrStat2, ErrMsg2, OnlySize ) ! WAMIT 
@@ -1153,6 +1162,10 @@ ENDIF
       END DO ! I
       DO I = 1, LEN(OutData%TMDFile)
         OutData%TMDFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
+        Int_Xferred = Int_Xferred   + 1
+      END DO ! I
+      DO I = 1, LEN(OutData%TMDControlFile)
+        OutData%TMDControlFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
         Int_Xferred = Int_Xferred   + 1
       END DO ! I
       Buf_size=IntKiBuf( Int_Xferred )
@@ -4507,6 +4520,9 @@ ENDIF
          CALL SetErrStat(ErrStat2, ErrMsg2, ErrStat, ErrMsg,RoutineName)
          IF (ErrStat>=AbortErrLev) RETURN
     DstMiscData%TMax = SrcMiscData%TMax
+    DstMiscData%TMDFile = SrcMiscData%TMDFile
+    DstMiscData%TMDControlFile = SrcMiscData%TMDControlFile
+    DstMiscData%OutRootName = SrcMiscData%OutRootName
  END SUBROUTINE HydroDyn_CopyMisc
 
  SUBROUTINE HydroDyn_DestroyMisc( MiscData, ErrStat, ErrMsg )
@@ -4779,6 +4795,9 @@ ENDIF
          DEALLOCATE(Int_Buf)
       END IF
       Db_BufSz   = Db_BufSz   + 1  ! TMax
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDFile)  ! TMDFile
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%TMDControlFile)  ! TMDControlFile
+      Int_BufSz  = Int_BufSz  + 1*LEN(InData%OutRootName)  ! OutRootName
   IF ( Re_BufSz  .GT. 0 ) THEN 
      ALLOCATE( ReKiBuf(  Re_BufSz  ), STAT=ErrStat2 )
      IF (ErrStat2 /= 0) THEN 
@@ -5156,6 +5175,18 @@ ENDIF
       ENDIF
       DbKiBuf ( Db_Xferred:Db_Xferred+(1)-1 ) = InData%TMax
       Db_Xferred   = Db_Xferred   + 1
+        DO I = 1, LEN(InData%TMDFile)
+          IntKiBuf(Int_Xferred) = ICHAR(InData%TMDFile(I:I), IntKi)
+          Int_Xferred = Int_Xferred   + 1
+        END DO ! I
+        DO I = 1, LEN(InData%TMDControlFile)
+          IntKiBuf(Int_Xferred) = ICHAR(InData%TMDControlFile(I:I), IntKi)
+          Int_Xferred = Int_Xferred   + 1
+        END DO ! I
+        DO I = 1, LEN(InData%OutRootName)
+          IntKiBuf(Int_Xferred) = ICHAR(InData%OutRootName(I:I), IntKi)
+          Int_Xferred = Int_Xferred   + 1
+        END DO ! I
  END SUBROUTINE HydroDyn_PackMisc
 
  SUBROUTINE HydroDyn_UnPackMisc( ReKiBuf, DbKiBuf, IntKiBuf, Outdata, ErrStat, ErrMsg )
@@ -5712,6 +5743,18 @@ ENDIF
       IF(ALLOCATED(Int_Buf)) DEALLOCATE(Int_Buf)
       OutData%TMax = DbKiBuf( Db_Xferred ) 
       Db_Xferred   = Db_Xferred + 1
+      DO I = 1, LEN(OutData%TMDFile)
+        OutData%TMDFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
+        Int_Xferred = Int_Xferred   + 1
+      END DO ! I
+      DO I = 1, LEN(OutData%TMDControlFile)
+        OutData%TMDControlFile(I:I) = CHAR(IntKiBuf(Int_Xferred))
+        Int_Xferred = Int_Xferred   + 1
+      END DO ! I
+      DO I = 1, LEN(OutData%OutRootName)
+        OutData%OutRootName(I:I) = CHAR(IntKiBuf(Int_Xferred))
+        Int_Xferred = Int_Xferred   + 1
+      END DO ! I
  END SUBROUTINE HydroDyn_UnPackMisc
 
  SUBROUTINE HydroDyn_CopyParam( SrcParamData, DstParamData, CtrlCode, ErrStat, ErrMsg )

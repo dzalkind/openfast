@@ -53,6 +53,8 @@ typedef   ^                            ^                             Waves_InitI
 typedef   ^                            ^                             Waves2_InitInputType     Waves2                          -          -          -         "Initialization data for Waves module"    -
 typedef   ^                            ^                             Current_InitInputType    Current                         -          -          -         "Initialization data for Current module"    -
 typedef   ^                            ^                             CHARACTER(1024)          PotFile                         -          -          -         "The name of the root potential flow file (without extension for WAMIT, complete name for FIT)"    -
+typedef   ^                            ^                             CHARACTER(1024)          TMDFile                         -          -          -         "The name of tuned mass damper (TMD) input file"    -
+typedef   ^                            ^                             CHARACTER(1024)          TMDControlFile                  -          -          -         "The name of the TMD control file, write unused to ignore and use constant TMD above"    -
 typedef   ^                            ^                             WAMIT_InitInputType      WAMIT                           -          -          -         "Initialization data for WAMIT module"    -
 typedef   ^                            ^                             WAMIT2_InitInputType     WAMIT2                          -          -          -         "Initialization data for WAMIT2 module"    -
 typedef   ^                            ^                             Morison_InitInputType    Morison                         -          -          -         "Initialization data for Morison module"    -
@@ -147,6 +149,10 @@ typedef   ^                            ^                             Morison_Mis
 typedef   ^                            ^                             WAMIT_InputType          u_WAMIT                           -          -          -         "WAMIT module inputs" -
 typedef   ^                            ^                             WAMIT2_InputType         u_WAMIT2                        -          -          -         "WAMIT2 module inputs" -
 typedef   ^                            ^                             Waves2_InputType         u_Waves2                        -          -          -         "Waves2 module inputs" -
+typedef   ^                            ^                             DbKi                     TMax                            -          -          -         "End Time" -
+typedef   ^                            ^                             CHARACTER(1024)          TMDFile                         -          -          -         "The name of tuned mass damper (TMD) input file"    -
+typedef   ^                            ^                             CHARACTER(1024)          TMDControlFile                  -          -          -         "The name of the TMD control file, write unused to ignore and use constant TMD above"    -
+typedef   ^                            ^                             CHARACTER(1024)          OutRootName                     -          -          -         "The name of the root file (without extension) including the full path"    -
 
 # ..... Parameters ................................................................................................................
 # Define parameters here:

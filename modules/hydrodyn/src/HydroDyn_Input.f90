@@ -839,6 +839,13 @@ SUBROUTINE HydroDynInput_GetInput( InitInp, ErrStat, ErrMsg )
       RETURN
    END IF
 
+   CALL ReadVar ( UnIn, FileName, InitInp%TMDControlFile, 'TMDControlFile', 'Name of hull TMD control file ', ErrStat2, ErrMsg2, UnEchoLocal )
+   CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, 'HydroDynInput_GetInput' )
+   IF (ErrStat >= AbortErrLev) THEN
+      CALL CleanUp()
+      RETURN
+   END IF
+
 
       ! WAMITULEN - WAMIT characteristic body length scale
 

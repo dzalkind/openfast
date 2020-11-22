@@ -365,8 +365,9 @@ SUBROUTINE HydroDyn_Init( InitInp, u, p, x, xd, z, OtherState, y, m, Interval, I
       InitLocal%DT  = Interval
       
       ! DZ Change: Copy Hull TMD filename to parameters
-      m%TMDFile      = InitLocal%TMDFile
-      
+      m%TMDFile         = InitLocal%TMDFile
+      m%TMDControlFile  = InitLocal%TMDControlFile
+      m%OutRootName     = InitLocal%OutRootName
          ! Verify all the necessary initialization data. Do this at the HydroDynInput module-level 
          !   because the HydroDynInput module is also responsible for parsing all this 
          !   initialization data from a file
@@ -2234,12 +2235,12 @@ USE NWTC_Library
     REAL(DbKi),  DIMENSION(:), ALLOCATABLE, SAVE      :: control_per
     REAL(DbKi),  DIMENSION(:), ALLOCATABLE, SAVE      :: w_buff
 
-    LOGICAL                                           :: reset
+    LOGICAL                                           :: reset, out_is_open
     INTEGER(IntKi)                                    :: status, n_buff, inst
     REAL(DbKi)                                        :: I0, minValue, maxValue, kp, ki, freq, damp, t_buff, Hs_est
     REAL(DbKi)                                        :: gamma, kappa, f0, dw, w_fll, w_hat, T_est, wn_control
     REAL(DbKi), SAVE                                  :: w_next
-    CHARACTER(1024)                                   :: OL_InputFileName, control_filename
+   !  CHARACTER(1024)                                   :: OL_InputFileName, control_filename
     REAL(DbKi), DIMENSION(2,2)                        :: A_fll, C_fll
     REAL(DbKi), DIMENSION(2,1)                        :: B_fll, dx_fll, x_fll, y_fll
     REAL(DbKi), DIMENSION(2,1), SAVE                  :: x_next
@@ -2272,9 +2273,20 @@ USE NWTC_Library
         CALL Read_FHA_Input(run_flag,n_FHA,u_FHA,up_FHA,upp_FHA,Time_n,mass,k,c,cq,m_xyz,u_bar,q_n,qdot_n,qdotdot_n,F_LF,F_IF,m,p,data_hold)
 
         ! Read Control Input
-         control_filename    = '/Users/dzalkind/Tools/Fortran/control.dat'
-         call read_input_ts(control_filename,Channels,control_per)
+         call read_input_ts(m%TMDControlFile,Channels,control_per)
          control_freq        = Channels(:,1)
+
+         inquire(unit = 2000, opened=out_is_open)
+         ! print *, TRIM(m%OutRootName)//"_TMD_ControlOut.txt"
+         if (.NOT. out_is_open) THEN
+            ! print *, TRIM(m%OutRootName)//"_TMD_ControlOut.txt"
+            OPEN(unit = 2000,file = TRIM(m%OutRootName)//"_TMD_ControlOut.txt",STATUS='REPLACE')
+            !                                         time , w, w_hat, T_est, Hs_est, wn_control, k_control, c_control
+            WRITE(2000,'(99(a10,TR4:))') 'Time (s)', 'Wave (m)', 'Tp Est.', 'Hs Est.', 'w_n cntrl','stiffness','damping'
+            ! WRITE(2000,*) 'Time (s)', 'Wave (m)', 'Tp Est.', 'Hs Est.', 'w_n cntrl','stiffness','damping'
+            WRITE(2000,'(99(a10,TR4:))') '(s)', '(m)', '(s)', '(m)', '(rad/s)','(N/m)','(N-s/m)'
+            ! WRITE(2000,*) '(s)', '(m)', '(s)', '(m)', '(rad/s)','(N/m)','(N-s/m)'
+         end if
 
          ! Set initial params based on FHA Input
          zeta = c(1)/ (2 * sqrt(k(1) * mass(1)))
@@ -2329,6 +2341,8 @@ USE NWTC_Library
          w_fll    = 1
          w_next   = 1
 
+         
+
       else
          reset = .FALSE.
          status  = 1
@@ -2348,6 +2362,7 @@ USE NWTC_Library
          reset    = .TRUE.
          I0       = w
          status   = 0
+         
       END IF
       ! print *, time
        inst = 1
@@ -2407,8 +2422,9 @@ USE NWTC_Library
         ! write output
       !   WRITE(198,*) w_fll, DT, freq, damp, status, reset, inst
       !   WRITE(199,'(99(F10.6,TR5:))') time , w, w_fll, dw, dt! , wn_control, Hs_est
-        WRITE(200,'(99(F10.6,TR5:))') time , w, w_hat, T_est, Hs_est, wn_control
-        WRITE(201,*) time , k(1), c(1), zeta, k_control, c_control
+        WRITE(2000,'(99(ES10.3E2,TR4:))') time , w, T_est, Hs_est, wn_control, k_control, c_control
+      !   WRITE(200,*) time , w, T_est, Hs_est, wn_control, k_control, c_control
+      !   WRITE(201,*) time , k(1), c(1), zeta, k_control, c_control
 
 
 
@@ -2572,6 +2588,7 @@ USE NWTC_Library
          write(1,out_fmt) Time_n(I), data_hold(I,:)
       END DO
       CLOSE (1)
+      CLOSE (2000)
    END IF
    
    !
