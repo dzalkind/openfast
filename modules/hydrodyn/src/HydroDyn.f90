@@ -2565,7 +2565,7 @@ USE NWTC_Library
     
         
        
-      OPEN(unit = 1,file = "Hull_TMD_Output.txt",STATUS='REPLACE')
+      OPEN(unit = 1,file = TRIM(m%OutRootName)//"_Hull_TMD_Output.txt",STATUS='REPLACE')
       WRITE(1,'(a10,TR5)',advance="no") 'Time (s)'
       
       DO I=1,n_FHA
