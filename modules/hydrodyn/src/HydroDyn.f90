@@ -2350,9 +2350,9 @@ USE NWTC_Library
 
       ! fll params
     f0  = 1
-    gamma = 0.16
-    kappa = 1.4 
-    freq     = 2 * 3.1415 / 300
+    gamma = 0.10
+    kappa = 3.4 
+    freq     = 2 * 3.1415 / 150
     damp     = .707
 
    IF (Time/=Time_last) THEN
@@ -2379,7 +2379,7 @@ USE NWTC_Library
         u_fll       = reshape((/w/),(/1,1/))        
         dx_fll      = matmul(A_fll,x_fll) + matmul(B_fll,u_fll)
         y_fll       = matmul(C_fll,x_fll)
-        dw         = -gamma * (w - x_fll(1,1)) * y_fll(2,1)
+        dw         = -gamma * (w - x_fll(1,1)) * y_fll(2,1) * w_fll
 
         ! Integrate: forward euler for now
         if (Time<m%TMax) THEN
@@ -2397,11 +2397,11 @@ USE NWTC_Library
         if (w_hat > 1e-8) THEN
             T_est   = 1.1 * 2 * 3.1415 / w_hat
         ELSE
-            T_est   = 20.
+            T_est   = 15.
         END IF
 
-        IF (T_est > 20) THEN
-            T_est   = 20.
+        IF (T_est > 15) THEN
+            T_est   = 15.
         end if
 
         ! compute control from lookup table interpolation
