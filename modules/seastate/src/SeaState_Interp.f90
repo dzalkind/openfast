@@ -261,7 +261,7 @@ subroutine SetCartesianZIndex(p, z_depth, delta, nMax, Indx_Lo, Indx_Hi, isopc, 
    if ( Indx_Lo < 1 ) then
       Indx_Lo = 1
       isopc = -1.0
-      call SetErrStat(ErrID_Warn,'Position has been clamped to the grid boundary',ErrStat,ErrMsg,'SetCartesianIndex') !error out if time is outside the lower bounds
+      call SetErrStat(ErrID_Warn,'Position has been clamped to the grid boundary',ErrStat,ErrMsg,'SetCartesianZIndex') !error out if time is outside the lower bounds
    end if
    
    Indx_Hi = min( Indx_Lo + 1, nMax )     ! make sure it's a valid index, one-based
@@ -270,7 +270,7 @@ subroutine SetCartesianZIndex(p, z_depth, delta, nMax, Indx_Lo, Indx_Hi, isopc, 
       ! Need to clamp to grid boundary
       Indx_Lo = Indx_Hi - 1
       isopc = 1.0
-      call SetErrStat(ErrID_Warn,'Position has been clamped to the grid boundary',ErrStat,ErrMsg,'SetCartesianIndex') !error out if time is outside the lower bounds
+      call SetErrStat(ErrID_Warn,'Position has been clamped to the grid boundary',ErrStat,ErrMsg,'SetCartesianZIndex') !error out if time is outside the lower bounds
    end if
    
    

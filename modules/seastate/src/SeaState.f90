@@ -1439,7 +1439,7 @@ SUBROUTINE SeaSt_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat, Er
             
             IF (p%WaveKinzi(i) <= zeta) THEN ! Probe in water
                IF (p%WaveStMod < 3) THEN ! Vertical or extrapolation stretching
-                  IF (p%WaveKinzi(i)<=0.0) THEN ! Probe is below SWL
+                  IF (p%WaveKinzi(i)<0.0) THEN ! Probe is below SWL
                   ! Evaluate wave kinematics as usual
                      CALL SeaSt_Interp_Setup( Time, positionXYZ, p%seast_interp_p, m%seast_interp_m, ErrStat2, ErrMsg2 ) 
                         CALL SetErrStat( ErrStat2, ErrMsg2, ErrStat, ErrMsg, 'SeaSt_CalcOutput' )
@@ -1490,7 +1490,7 @@ SUBROUTINE SeaSt_CalcOutput( Time, u, p, x, xd, z, OtherState, y, m, ErrStat, Er
                WaveDynP(i)  = 0.0
             END IF
          ELSE ! No wave stretching
-            IF (p%WaveKinzi(i)<=0) THEN ! Probe at or below SWL
+            IF (p%WaveKinzi(i)<0) THEN ! Probe at or below SWL
                IF (EqualRealNos(p%WaveKinzi(i),0.0_SiKi)) THEN
                   positionXYZ(3) = -0.000001_SiKi
                END IF
