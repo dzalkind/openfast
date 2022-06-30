@@ -453,20 +453,19 @@ SUBROUTINE FreeDynamicLib ( DLL, ErrStat, ErrMsg )
    INTEGER(HANDLE)                           :: FileAddr    ! The address of file FileName.  (RETURN value from LoadLibrary in kernel32.f90)
    INTEGER(BOOL)                             :: Success     ! Whether or not the call to FreeLibrary was successful
 
+   ErrStat = ErrID_None
+   ErrMsg = ''
    IF ( DLL%FileAddr == INT(0,C_INTPTR_T) ) RETURN
    
    FileAddr = TRANSFER(DLL%FileAddr, FileAddr) !convert INTEGER(C_INTPTR_T) to INTEGER(HANDLE) [used only for compatibility with gfortran]
 
       ! Free the DLL:
    Success = FreeLibrary( FileAddr ) !If the function succeeds, the return value is nonzero. If the function fails, the return value is zero.
-
    IF ( Success == FALSE ) THEN !BJJ: note that this is the Windows BOOL type so FALSE isn't the same as the Fortran LOGICAL .FALSE.
       ErrStat = ErrID_Fatal
       ErrMsg  = 'The dynamic library could not be freed.'
       RETURN
    ELSE
-      ErrStat = ErrID_None
-      ErrMsg = ''
       DLL%FileAddr = INT(0,C_INTPTR_T)
    END IF
 

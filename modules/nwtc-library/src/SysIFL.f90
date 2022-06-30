@@ -519,8 +519,10 @@ SUBROUTINE FreeDynamicLib ( DLL, ErrStat, ErrMsg )
 
    END INTERFACE
 
-   ! Close the library:
+   ErrStat = ErrID_None
+   ErrMsg = ''
 
+   ! Close the library:
    IF( .NOT. C_ASSOCIATED(DLL%FileAddrX) ) RETURN
    Success = dlClose( DLL%FileAddrX ) !The function dlclose() returns 0 on success, and nonzero on error.
 
