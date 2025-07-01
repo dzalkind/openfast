@@ -881,6 +881,7 @@ IMPLICIT NONE
     REAL(ReKi)  :: LSShftFxa = 0.0_ReKi      !< Rotating low-speed shaft force x [N]
     REAL(ReKi)  :: LSShftFys = 0.0_ReKi      !< Nonrotating low-speed shaft force y [N]
     REAL(ReKi)  :: LSShftFzs = 0.0_ReKi      !< Nonrotating low-speed shaft force z [N]
+    REAL(ReKi) , DIMENSION(:), ALLOCATABLE  :: TipDxc      !< Out of plane tip deflection [m]
   END TYPE ED_OutputType
 ! =======================
 CONTAINS
@@ -7128,6 +7129,18 @@ subroutine ED_CopyOutput(SrcOutputData, DstOutputData, CtrlCode, ErrStat, ErrMsg
    DstOutputData%LSShftFxa = SrcOutputData%LSShftFxa
    DstOutputData%LSShftFys = SrcOutputData%LSShftFys
    DstOutputData%LSShftFzs = SrcOutputData%LSShftFzs
+   if (allocated(SrcOutputData%TipDxc)) then
+      LB(1:1) = lbound(SrcOutputData%TipDxc)
+      UB(1:1) = ubound(SrcOutputData%TipDxc)
+      if (.not. allocated(DstOutputData%TipDxc)) then
+         allocate(DstOutputData%TipDxc(LB(1):UB(1)), stat=ErrStat2)
+         if (ErrStat2 /= 0) then
+            call SetErrStat(ErrID_Fatal, 'Error allocating DstOutputData%TipDxc.', ErrStat, ErrMsg, RoutineName)
+            return
+         end if
+      end if
+      DstOutputData%TipDxc = SrcOutputData%TipDxc
+   end if
 end subroutine
 
 subroutine ED_DestroyOutput(OutputData, ErrStat, ErrMsg)
@@ -7174,6 +7187,9 @@ subroutine ED_DestroyOutput(OutputData, ErrStat, ErrMsg)
    end if
    if (allocated(OutputData%BlPitch)) then
       deallocate(OutputData%BlPitch)
+   end if
+   if (allocated(OutputData%TipDxc)) then
+      deallocate(OutputData%TipDxc)
    end if
 end subroutine
 
@@ -7235,6 +7251,7 @@ subroutine ED_PackOutput(RF, Indata)
    call RegPack(RF, InData%LSShftFxa)
    call RegPack(RF, InData%LSShftFys)
    call RegPack(RF, InData%LSShftFzs)
+   call RegPackAlloc(RF, InData%TipDxc)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -7306,6 +7323,7 @@ subroutine ED_UnPackOutput(RF, OutData)
    call RegUnpack(RF, OutData%LSShftFxa); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%LSShftFys); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpack(RF, OutData%LSShftFzs); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpackAlloc(RF, OutData%TipDxc); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine ED_Input_ExtrapInterp(u, t, u_out, t_out, ErrStat, ErrMsg)
@@ -7681,6 +7699,9 @@ SUBROUTINE ED_Output_ExtrapInterp1(y1, y2, tin, y_out, tin_out, ErrStat, ErrMsg 
    y_out%LSShftFxa = a1*y1%LSShftFxa + a2*y2%LSShftFxa
    y_out%LSShftFys = a1*y1%LSShftFys + a2*y2%LSShftFys
    y_out%LSShftFzs = a1*y1%LSShftFzs + a2*y2%LSShftFzs
+   IF (ALLOCATED(y_out%TipDxc) .AND. ALLOCATED(y1%TipDxc)) THEN
+      y_out%TipDxc = a1*y1%TipDxc + a2*y2%TipDxc
+   END IF ! check if allocated
 END SUBROUTINE
 
 SUBROUTINE ED_Output_ExtrapInterp2(y1, y2, y3, tin, y_out, tin_out, ErrStat, ErrMsg )
@@ -7794,6 +7815,9 @@ SUBROUTINE ED_Output_ExtrapInterp2(y1, y2, y3, tin, y_out, tin_out, ErrStat, Err
    y_out%LSShftFxa = a1*y1%LSShftFxa + a2*y2%LSShftFxa + a3*y3%LSShftFxa
    y_out%LSShftFys = a1*y1%LSShftFys + a2*y2%LSShftFys + a3*y3%LSShftFys
    y_out%LSShftFzs = a1*y1%LSShftFzs + a2*y2%LSShftFzs + a3*y3%LSShftFzs
+   IF (ALLOCATED(y_out%TipDxc) .AND. ALLOCATED(y1%TipDxc)) THEN
+      y_out%TipDxc = a1*y1%TipDxc + a2*y2%TipDxc + a3*y3%TipDxc
+   END IF ! check if allocated
 END SUBROUTINE
 END MODULE ElastoDyn_Types
 !ENDOFREGISTRYGENERATEDFILE

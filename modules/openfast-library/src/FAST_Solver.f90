@@ -982,6 +982,8 @@ SUBROUTINE SrvD_InputSolve( p_FAST, m_FAST, u_SrvD, y_ED, y_SED, y_IfW, y_ExtInf
       u_SrvD%LSShftFys = y_ED%LSShftFys
       u_SrvD%LSShftFzs = y_ED%LSShftFzs
 
+      u_SrvD%TipDxc = y_ED%TipDxc
+
       !   ! ServoDyn inputs from AeroDyn
       !IF ( p_FAST%CompAero == Module_AD ) THEN
       !ELSE

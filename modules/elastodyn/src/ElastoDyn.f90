@@ -1844,8 +1844,8 @@ END IF
    y%NcIMURAzs = m%AllOuts(NcIMURAzs)*D2R                  ! Nacelle yaw     acceleration (rad/s^2) -- this is in the shaft (tilted) coordinate system, instead of the nacelle (nontilted) coordinate system
    y%LSShftFxa = m%AllOuts(LSShftFxa)*1000.                ! Rotating low-speed shaft force x (GL co-ords) (N)
    y%LSShftFys = m%AllOuts(LSShftFys)*1000.                ! Nonrotating low-speed shaft force y (GL co-ords) (N)
-   y%LSShftFzs = m%AllOuts(LSShftFzs)*1000.                ! Nonrotating low-speed shaft force z (GL co-ords) (N)
-
+   y%LSShftFzs = m%AllOuts(LSShftFzs)*1000.                ! Nonrotating low-speed shaft force z (GL co-ords) (N)  
+   y%TipDxc    = (/ m%AllOuts(TipDxc1), m%AllOuts(TipDxc2), m%AllOuts(TipDxc3) /)  ! Blade tip deflection in x-direction (GL co-ords) (m)
                
    RETURN
    

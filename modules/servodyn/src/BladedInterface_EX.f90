@@ -516,6 +516,11 @@ CONTAINS
       dll_data%avrswap(1013:1015) = u%PtfmMotionMesh%TranslationAcc (1:3,1)   ! Platform motion -- Acceleration TAX, TAY, TAZ (m/s^2)
       dll_data%avrswap(1016:1018) = u%PtfmMotionMesh%RotationAcc    (1:3,1)   ! Platform motion -- Acceleration RAX, RAY, RAZ (rad/s^2)
 
+      ! Add tip displacement here
+      dll_data%avrswap(1020) = u%TipDxc(1)    ! Tip displacement TDX (m)
+      dll_data%avrswap(1021) = u%TipDxc(2)    ! Tip displacement TDY (m)
+      dll_data%avrswap(1022) = u%TipDxc(3)    ! Tip displacement TDZ (m)
+
       !------------------
       ! Set other sensors here (non-lidar measurements)
       !       Add summary file descriptions about channels to InitNonLidarSensors as channels are added.

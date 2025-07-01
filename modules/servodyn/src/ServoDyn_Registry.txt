@@ -531,6 +531,7 @@ typedef	^	InputType	ReKi	LidSpeed	{:}     -       -	"Lidar measured wind speeds"
 typedef	^	InputType	ReKi	MsrPositionsX	{:}     -	-	"Lidar X direction measurement points" m
 typedef	^	InputType	ReKi	MsrPositionsY	{:}     -	-	"Lidar Y direction measurement points" m
 typedef	^	InputType	ReKi	MsrPositionsZ	{:}     -	-	"Lidar Z direction measurement points" m
+typedef	^	InputType	ReKi	TipDxc	{:}     -	-	"Out of plane tip deflection" m
 
 
 # ..... Outputs ...................................................................................................................

@@ -535,6 +535,7 @@ IMPLICIT NONE
     REAL(ReKi) , DIMENSION(:), ALLOCATABLE  :: MsrPositionsX      !< Lidar X direction measurement points [m]
     REAL(ReKi) , DIMENSION(:), ALLOCATABLE  :: MsrPositionsY      !< Lidar Y direction measurement points [m]
     REAL(ReKi) , DIMENSION(:), ALLOCATABLE  :: MsrPositionsZ      !< Lidar Z direction measurement points [m]
+    REAL(ReKi) , DIMENSION(:), ALLOCATABLE  :: TipDxc      !< Out of plane tip deflection [m]
   END TYPE SrvD_InputType
 ! =======================
 ! =========  SrvD_OutputType  =======
@@ -5486,6 +5487,18 @@ subroutine SrvD_CopyInput(SrcInputData, DstInputData, CtrlCode, ErrStat, ErrMsg)
       end if
       DstInputData%MsrPositionsZ = SrcInputData%MsrPositionsZ
    end if
+   if (allocated(SrcInputData%TipDxc)) then
+      LB(1:1) = lbound(SrcInputData%TipDxc)
+      UB(1:1) = ubound(SrcInputData%TipDxc)
+      if (.not. allocated(DstInputData%TipDxc)) then
+         allocate(DstInputData%TipDxc(LB(1):UB(1)), stat=ErrStat2)
+         if (ErrStat2 /= 0) then
+            call SetErrStat(ErrID_Fatal, 'Error allocating DstInputData%TipDxc.', ErrStat, ErrMsg, RoutineName)
+            return
+         end if
+      end if
+      DstInputData%TipDxc = SrcInputData%TipDxc
+   end if
 end subroutine
 
 subroutine SrvD_DestroyInput(InputData, ErrStat, ErrMsg)
@@ -5565,6 +5578,9 @@ subroutine SrvD_DestroyInput(InputData, ErrStat, ErrMsg)
    end if
    if (allocated(InputData%MsrPositionsZ)) then
       deallocate(InputData%MsrPositionsZ)
+   end if
+   if (allocated(InputData%TipDxc)) then
+      deallocate(InputData%TipDxc)
    end if
 end subroutine
 
@@ -5657,6 +5673,7 @@ subroutine SrvD_PackInput(RF, Indata)
    call RegPackAlloc(RF, InData%MsrPositionsX)
    call RegPackAlloc(RF, InData%MsrPositionsY)
    call RegPackAlloc(RF, InData%MsrPositionsZ)
+   call RegPackAlloc(RF, InData%TipDxc)
    if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
@@ -5767,6 +5784,7 @@ subroutine SrvD_UnPackInput(RF, OutData)
    call RegUnpackAlloc(RF, OutData%MsrPositionsX); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%MsrPositionsY); if (RegCheckErr(RF, RoutineName)) return
    call RegUnpackAlloc(RF, OutData%MsrPositionsZ); if (RegCheckErr(RF, RoutineName)) return
+   call RegUnpackAlloc(RF, OutData%TipDxc); if (RegCheckErr(RF, RoutineName)) return
 end subroutine
 
 subroutine SrvD_CopyOutput(SrcOutputData, DstOutputData, CtrlCode, ErrStat, ErrMsg)
@@ -6326,6 +6344,9 @@ SUBROUTINE SrvD_Input_ExtrapInterp1(u1, u2, tin, u_out, tin_out, ErrStat, ErrMsg
    IF (ALLOCATED(u_out%MsrPositionsZ) .AND. ALLOCATED(u1%MsrPositionsZ)) THEN
       u_out%MsrPositionsZ = a1*u1%MsrPositionsZ + a2*u2%MsrPositionsZ
    END IF ! check if allocated
+   IF (ALLOCATED(u_out%TipDxc) .AND. ALLOCATED(u1%TipDxc)) THEN
+      u_out%TipDxc = a1*u1%TipDxc + a2*u2%TipDxc
+   END IF ! check if allocated
 END SUBROUTINE
 
 SUBROUTINE SrvD_Input_ExtrapInterp2(u1, u2, u3, tin, u_out, tin_out, ErrStat, ErrMsg )
@@ -6477,6 +6498,9 @@ SUBROUTINE SrvD_Input_ExtrapInterp2(u1, u2, u3, tin, u_out, tin_out, ErrStat, Er
    END IF ! check if allocated
    IF (ALLOCATED(u_out%MsrPositionsZ) .AND. ALLOCATED(u1%MsrPositionsZ)) THEN
       u_out%MsrPositionsZ = a1*u1%MsrPositionsZ + a2*u2%MsrPositionsZ + a3*u3%MsrPositionsZ
+   END IF ! check if allocated
+   IF (ALLOCATED(u_out%TipDxc) .AND. ALLOCATED(u1%TipDxc)) THEN
+      u_out%TipDxc = a1*u1%TipDxc + a2*u2%TipDxc + a3*u3%TipDxc
    END IF ! check if allocated
 END SUBROUTINE
 
