@@ -3,6 +3,7 @@ import copy
 import random
 import time
 import operator
+import shutil
 import numpy as np
 from functools import reduce
 
@@ -2484,6 +2485,12 @@ class InputWriter_OpenFAST(object):
         f.write('----------------------- LINE TYPES ------------------------------------------\n')
         f.write(" ".join(['{:<11s}'.format(i) for i in ['Name', 'Diam', 'MassDen', 'EA', 'BA/-zeta', 'EI', 'Cd', 'Ca', 'CdAx', 'CaAx', 'Cl (optional)', 'dF (optional)', 'cF (optional)']])+'\n')
         f.write(" ".join(['{:<11s}'.format(i) for i in ['(-)', '(m)', '(kg/m)', '(N)', '(N-s/-)', '(N-m^2)', '(-)', '(-)', '(-)', '(-)', '(-)', '(-)', '(-)']])+'\n')
+        # Copy EA files to new directory
+        for line_eas in self.fst_vt['MoorDyn']['EA_file_paths']:
+            for ea in line_eas:
+                if ea:
+                    shutil.copy(ea, self.FAST_runDirectory)
+
         for i in range(len(self.fst_vt['MoorDyn']['Name'])):
             ln = []
             ln.append('{:<11}'.format(self.fst_vt['MoorDyn']['Name'][i]))

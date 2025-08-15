@@ -3107,6 +3107,19 @@ class InputReader_OpenFAST(object):
                     data_line = readline_filterComments(f).split()
                 data_line = ''.join(data_line)  # re-join
 
+                # Save EA file input paths
+                self.fst_vt['MoorDyn']['EA_file_paths'] = []
+                for ea_list in self.fst_vt['MoorDyn']['EA']:
+                    ea_paths = []
+                    for ea in ea_list:
+                        if isinstance(ea, str):
+                            ea_file = os.path.normpath(os.path.join(os.path.dirname(moordyn_file), ea))
+                            ea_paths.append(ea_file)
+                        else:
+                            ea_paths.append(None)
+                    self.fst_vt['MoorDyn']['EA_file_paths'].append(ea_paths)
+
+
             elif 'rodtypes' in data_line or 'roddictionary' in data_line: 
                 data_line = f.readline()
                 data_line = f.readline()
